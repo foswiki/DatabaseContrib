@@ -1,0 +1,256 @@
+%META:TOPICINFO{author="VadimBelman" date="1443571952" format="1.1" version="2"}%
+%META:TOPICPARENT{name="Contribs"}%
+<!--
+One line description, required for extensions repository catalog.
+   * Set SHORTDESCRIPTION = %$SHORTDESCRIPTION%
+-->
+---+!! DatabaseContrib
+
+%SHORTDESCRIPTION%
+
+%TOC%
+
+---++ Summary of Contents
+
+This contrib provides subroutines that come in handy when accessing a SQL database.
+
+   * [[#DbInit][=db_init=]] initializes the module
+   * [[#DbConnect][=db_connect=]] connects to a SQL database
+   * [[#DbConnected][=db_connected=]] verifies that a connection exists for a database
+   * [[#DbDisconnect][=db_disconnect=]] disconnects from all databases
+   * [[#DbAccessAllowed][=db_access_allowed=]] tests for additional access permissions
+
+This contrib is used among others, by Foswiki:Plugins.DBIQueryPlugin. The hope is that we can consolidate the many different database connection schemes currently in use into this single contrib.
+
+---++ Detailed Documentation
+
+This plugin has its origins in Foswiki:Plugins.DBIQueryPlugin. Additional
+capabilities have been migrated from other database connection mechanisms
+deployed in various TWiki plugins.
+
+This plugin uses the database independent access methods in CPAN:DBI to
+facilitate access to the SQL database. In the following =$dbh= refers to
+the database handle abstraction of CPAN:DBI.
+
+---+++ Conventions
+
+The following conventions are used across this documentation:
+
+|  *Notations*  ||
+|=[ $some_argument ]=|Subroutine aguments enclosed in square brackets are optional|
+|=...=|0 or more arguments of the same kind as the one preceding the triple-dot element|
+|  *Typical arguments or variables*  ||
+|=$dbname=|Database name defined in [[#DatabaseConfig][Database Definition]]|
+|=$dbh=|Database handle as used in =CPAN:DBI= documentation|
+|=$user=|%WIKITOOLNAME% user name. In most cases might be in any valid form: long, short or login name - unless otherwise specified in the documentation|
+|=$topic=|%WIKITOOLNAME% topic name. May or may not include web named part unless otherwise specified in the documentation|
+
+#DbInit
+---+++ =db_init ( )=
+
+Initializes the module. Must be called before any other subroutines or if content of =$Foswiki::cfg{Extensions}{DatabaseContrib}{connections}= has been changed. The latter is mostly related to writing test units.
+
+#DbConnect
+---+++ =db_connect ( $dbname ) -> ( $dbh )=
+
+Connects to the database indicated by =$dbname=. The database can then be queried or updated.
+
+#DbConnected
+---+++ =db_connected ( $dbname ) -> ( undef|0|1 )=
+
+Checks if there is initialized =dbh= for database defined by =$dbname=. Returns undef if database defined by =$dbname= is missing in database definitions.
+
+#DbDisconnect
+---+++ =db_disconnect ( [ $dbname, ... ] )=
+
+Disconnects from the databases which names listed in the argumets. Disconnects all connected databases if the list is empty.
+
+#DbAccessAllowed
+---+++ =db_access_allowed ( $dbname, $topic, $access_type [, $user ] )=
+
+Verifies user's permissions of type =$access_type= for a database defined by =$dbname= in a topic defined by =$topic=. If =$user= argument is omitted then permissions are checked for the currently logged in user.
+
+More about permissions read in [[#AccessControl][Access Control]].
+
+#DatabaseConfig
+---++ Database Configuration
+
+The databases that one may connect to are defined through the =configure= script. The connection information is inserted in the =DatabaseContrib= section.
+
+<blockquote style="background-color:#f5f5f5">
+Example:
+<pre>
+   message_board => {
+       user => 'dbuser',
+       password => 'dbpasswd',
+       driver => 'mysql',
+       driver_attributes => {
+           mysql_unicode => 1,
+       },
+       codepage => 'utf8',
+       database => 'message_board',
+       host => 'localhost',
+       init => 'SET ...',
+       allow_do => {
+           default => [qw(AdminGroup)],
+           'Sandbox.CommonDiscussion' => [qw(Guest)],
+       },
+       allow_query => {
+           'Sandbox.SomeInfo' => [qw(SomeGroup OrUser)],
+       },
+       usermap => {
+           SomeGroup => {
+               user => 'somedbuser',
+               password => 'somedbpassword',
+           },
+       },
+   }
+</pre>
+</blockquote>
+
+This example defines a database =message_board= and the necessary information to access this database. Additional databases can be added, as a comma-separated list of Perl hash refs. 
+
+The following parameters can be used to specify a database. The first level key are the database names used in the above functions. Each database has its own set of parameters defined in the hash.
+
+|*Key*|*Description*|*Default*|*Required*|
+|=database=|Database name on the server.|_none_|required|
+|=user=|Default database account name.|""|optional|
+|=password=|Default database account password.|""|optional|
+|=driver=|CPAN:DBI driver used to access the server, (such as =Pg=, =mysql=, =sqlite=).<sup>[[#DriverNote][1]]</sup>|_none_|required|
+|=driver_attributes=|Additional DBD driver specific attributes to be passed as fourth argument to =DBI-&gt;connect()= call. %BR% %X% Attributes =RaiseError=, =PrintError= and =FetchHashKeyName= are used intrnally by DatabaseContrib and will be ignored.|_none_|optinal|
+|=dsn=|Complete =dsn= string to be used when creating the connection. See your DBD driver documentation.%BR%%T% _With this key defined both =database= and =driver= keys are ignored._|_none_|optional|
+|=init=|Initialization command to be sent to the database server just after the connection is initiated.|_none_|optional|
+|=host=|DB server hostname.|=localhost=|optional|
+|=codepage=|Client-side codepage of this connection.<sup>[[#CodePageNote][2]]</sup>|_none_|optional|
+|=usermap=|Hash ref mapping Foswiki users or groups to database accounts. See [[#AccessControl][Access control]] below.|_none_|optional|
+|=allow_*=|Additional topic-level access control support (see [[#AccessControl][Access control]] below).|_none_|optional|
+
+#DriverNote
+<sup>1</sup> Only !MySQL support has been tested.
+
+#CodePageNote
+<sup>2</sup> Only !MySQL and !PosgreSQL support provided for this feature. Support for other servers is not implemented yet.
+
+#AccessControl
+---++ Access Control
+
+Finding out if a user is permitted for an action might be somewhat tricky as there're three layers of control are involved:
+
+   1. On the top level %WIKITOOLNAME% checks user's permissions to read or modify a topic. This layer we better consider when deal with a plugin like DBIQueryPlugin. Still, we mention it here as it's a crucial part of the whole security issue.
+   1. DatabaseContrib provides (but doesn't use) the middle layer check [[#AccessChecks][mechanism]] which can be used by a plugin or any other Perl code.
+      * The only kind of permission check performed by DatabaseContrib is control if the %WIKITOOLNAME% user can be mapped into a DB user by means of the [[#DatabaseConfig][database definition]] as described [[#Wiki2DBMap][below]].
+   1. Finally, the lowest layer is database server side permissions implied thru %WIKITOOLNAME% user to DB user mappings mentionted above.
+
+#Wiki2DBMap
+---++++ %WIKITOOLNAME% to database user mapping.
+ 
+Mapping of Foswiki users into database server user accounts is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above).
+The check is done using the following rules:
+
+   1. Check if %WIKITOOLNAME% user has an enty in =usermap=.
+   1. Check if %WIKITOOLNAME% user is a member of a group that has an entry in =usermap=.
+   1. Use =user= and =password= keys of the [[#Config][database definition]].
+
+=db_connect= fails if no valid mapping is found.
+
+#AccessChecks
+---++++ Access checks.
+
+Access checks are performed by =db_access_allowed= subroutine. Checks are based upon special keys in a [[#DatabaseConfig][database definition]]. The keys are mapping topics into
+%WIKITOOLNAME% users and groups. A key is related to a kind of action allowed for a user if topic maps into this user or into a group this user belongs to. Key names are not predefined and
+their meanings are specified by a plugin performing an access check.
+
+For example, DBIQueryPlugin relies upon =allow_do= and =allow_query= keys to determine if %<nop>DBI_DO% and %<nop>DBI_QUERY% are accessible by the user respectively.
+%T% Read DBIQueryPlugin documention to find out more about [[DBIQueryPlugin#AccessControl][access checks]].
+
+There are no special restrictions on access key names though except that they mist differ from the standard keys used by DatabaseContrib. Though it is highly recommended that name
+shall be prepended with =allow_= prefix as this way it will never get into a confilict with possible future development of this contrib.
+
+An access rule is a hash of the following form:
+
+<verbatim>
+allow_something => {
+    default => [ qw( SomeMightyUser MightyGroup ) ],
+    'SomeWeb.SomeTopic' => [ qw( WikiUser SomeGroup ) ],
+    'SomeWeb.SomeOtherTopic' => [ qw( SomeOtherGroup ScumBag ) ],
+},
+</verbatim>
+
+In simple words it means that !WikiUser and memebers of !SomeGroup are allowed to do =something= within topic =!SomeWeb.SomeTopic=. Topic names has to be in their full form, including web name.
+No variable or macros expansion is done for the purpose of better readability and consequently for better control over permissions.
+
+Instead of a topic name special key =default= could be used to define permissions to topics not individually listed for a paticular =allow_= key. In the last example it means that !WikiUser is
+allowed for !SomeWeb.SomeTopic but not for !SomeWeb.SomeOtherTopic and not for any other topic of this %WIKITOOLNAME% unless he is a member of !MightGroup.
+
+%X% It is important to remember that =default= key is used only and only when no individual entry for a topic is present in an =allow_= hash. What it means is that neither !SomeMightyUser nor
+members of !MightyGroup are allowed for !SomeWeb.SomeOtherTopic unless they're members of !SomeGroup. In real life I would suggest making life simplier for !AdminGroup by including it into the =default=
+key. But it still has to be mentioned for any other topic where memers of the group require access.
+
+---++++ Permissions inheritance.
+
+Quite often permissions are organized hierarchically meaning that if a user allowed for one kind of access then he is allowed for more restrictive kind of access just by definition.
+For example, DBIQueryPlugin postulates that users having =allow_do= permission doesn't need to be specifically listed in =allow_query= for the same topic.
+
+=db_access_allowed()= subroutine implements this functionality by defining permissions inheritance. Let's add one more =allow_= key to the example above:
+
+<verbatim>
+allow_somemore => {
+    'SomeWeb.SomeTopic' => [ qw( ScumBag ) ],
+},
+</verbatim>
+
+Assume that =allow_somemore= inherits from =allow_something=. Then the following table displays what users a granted with =allow_somemore= for a topic.
+
+%X% __Note:__ We suppose that !SomeMightUser is a member of !MightyGroup only; !WikiUser isn a member of !SomeGroup only. !ScumBag isn't a member of any group.
+
+|<nop>                   |  *!SomeMightUser*  |  *!WikiUser*  | *!ScumBag* |
+|*!SomeWeb.SomeTopic*     |  *%X%*  |  *%Y%*  |  *%Y%*  |
+|*!SomeWeb.SomeOtherTopic*|  *%X%*  |  *%X%*  |  *%Y%*  |
+|*!SomeWeb.UnlistedTopic* |  *%Y%*  |  *%X%*  |  *%X%*  |
+
+Technically, inheritance is implemented in a very simple way: if there is no match for a user in an =allow_= key then =db_access_allowed= is been called against the key it inherits from.
+
+%X% __Note:__ For the moment there is no way to define custom inheritance. It is hardcoded to implement DBIQueryPlugin =allow_query= %M% =allow_do= relations. Though it's only a matter
+to find out which implementations is better.
+
+---++ Settings
+
+Settings are stored as preferences variables. To reference a setting write ==%<nop>&lt;plugin&gt;_&lt;setting&gt;%==, e.g. ==%<nop>DATABASECONTRIB_DEBUG%==
+
+   * One line description:
+      * Set SHORTDESCRIPTION = Provides subroutines useful in writing plugins that access a SQL database
+
+---++ Installation Instructions
+
+__Note:__ You do not need to install anything on the browser to use this module. The following instructions are for the administrator who installs the module on the Foswiki server.
+
+   * For an __automated installation__, run the [[%SCRIPTURL{configure}%][configure]] script and follow "Find More Extensions" in the in the __Extensions__ section.
+
+   * Or, follow these __manual installation__ steps:
+      * Download the ZIP file from the Plugins home (see below).
+      * Unzip ==%TOPIC%.zip== in your twiki installation directory. Content:
+        | *File:* | *Description:* |
+        | ==data/Foswiki/%TOPIC%.txt== | Contrib topic |
+        | ==lib/Foswiki/Contrib/%TOPIC%.pm== | Contrib Perl module |
+        | ==lib/Foswiki/Contrib/%TOPIC%/Config.spec== | Configuration specification |
+      * Set the ownership of the extracted directories and files to the webserver user.
+
+   * Contrib __configuration and testing__:
+      * Verify access and ownership settings for the new scripts.
+      * Edit your .htaccess file to require a valid user for the =savesection= script (if needed).
+
+---++ Installation
+%$INSTALL_INSTRUCTIONS%
+
+---++ Info
+
+|  Author: | VadimBelman |
+|  Copyright: | &copy; %$CREATEDYEAR%, VadimBelman, All Rights Reserved |
+|  License: | GPL ([[http://www.gnu.org/copyleft/gpl.html][GNU General Public License]]) |
+|  Dependencies: | %$DEPENDENCIES% |
+|  Version: | %$VERSION% |
+|  Release: | %$RELEASE% |
+|  Change History: | <!-- versions below in reverse order -->&nbsp; |
+|  1.0.0 (XX Mmm 20XX): | Initial version |
+|  Home: | http://foswiki.org/Extensions/%TOPIC% |
+|  Support: | http://foswiki.org/Support/%TOPIC% |

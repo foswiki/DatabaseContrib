@@ -1,0 +1,4 @@
+!noci
+data/System/DatabaseContrib.txt 0644 Documentation page
+lib/Foswiki/Contrib/DatabaseContrib.pm  Perl module 
+lib/Foswiki/Contrib/DatabaseContrib/Config.spec 0444 Configuration
