@@ -9,6 +9,7 @@ use warnings;
 
 use DBI;
 
+use Foswiki::Func;
 # use Error qw(:try);
 use CGI qw(:html2);
 use Carp qw(longmess);
