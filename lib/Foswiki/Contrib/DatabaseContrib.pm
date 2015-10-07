@@ -10,12 +10,12 @@ use warnings;
 use DBI;
 
 use Foswiki::Func;
+
 # use Error qw(:try);
 use CGI qw(:html2);
 use Carp qw(longmess);
+use Storable qw(dclone);
 use Data::Dumper;
-
-my ( $INIT_COMPLETE, %dbi_connections );
 
 # $VERSION is referred to by Foswiki, and is the only global variable that
 # *must* exist in this package. For best compatibility, the simple quoted decimal
@@ -32,7 +32,7 @@ my ( $INIT_COMPLETE, %dbi_connections );
 #   v1.2.1_001 -> v1.2.2 -> v1.2.2_001 -> v1.2.3
 #   1.21_001 -> 1.22 -> 1.22_001 -> 1.23
 #
-our $VERSION = '1.01';
+our $VERSION = '1.02_001';
 
 # $RELEASE is used in the "Find More Extensions" automation in configure.
 # It is a manually maintained string used to identify functionality steps.
@@ -62,7 +62,27 @@ our ( @ISA, @EXPORT_OK, %EXPORT_TAGS );
 
 %EXPORT_TAGS = ( all => [@EXPORT_OK], );
 
+=begin TML
+
+---++ Internal object structure.
+
+Top level keys:
+
+|*Key name*|*Type*|*Description*|
+|=_dbh=|=hashref=|Mapping of a connection name into initialized database handler =dbh=.|
+|=_cached=|=hashref=|Keeps miscellaneous data for easier or perhaps faster access. Makes it possible to freeze data at certain state.|
+
+=cut
+
+# Internally used object for emulating deprecated procedural interface.
+my $db_object;
+
 sub _warning (@) {
+    return Foswiki::Func::writeWarning(@_);
+}
+
+sub warning {
+    my $self = shift;
     return Foswiki::Func::writeWarning(@_);
 }
 
@@ -76,54 +96,139 @@ sub _failure ($) {
     }
 }
 
+sub _fail {
+    my $self = shift;
+    if ( $Foswiki::cfg{Contrib}{DatabaseContrib}{dieOnFailure} ) {
+
+        # TODO Some kind of message prefix is to be considered
+        throw Error::Simple -text => join( '', @_ );
+    }
+    else {
+        return 1;
+    }
+}
+
 sub _check_init {
     die
 "DatabaseContrib has not been initalized yet. Call db_init() before use please."
-      unless $INIT_COMPLETE;
+      unless defined($db_oject)
+      && $db_object->isa('Foswiki::Contrib::DatabaseContrib');
 }
 
-sub db_init {
+sub new {
+    my $self = bless {}, shift;
+
+    $self->init(@_);
+
+    return $self;
+}
+
+sub _cache {
+    my $self = shift;
+    my ( $key, $data ) = @_;
+
+    if ( @_ > 1 ) {
+
+# TODO If we gonna rely on time value to check validity of the cache then time granularity isn't sufficient.
+        $self->{_cached}{$key} = {
+            time => time,
+            data => dclone($data),
+        };
+    }
+    return undef
+      unless defined $self->{_cached} && defined $self->{_cached}{$key};
+    return
+      wantarray
+      ? ( @{ $self->{_cached}{$key} }{qw(time data)} )
+      : $self->{_cached}{$key}{data};
+}
+
+sub init {
+    my $self = shift;
+
+    if ( scalar(@_) % 2 ) {
+        throw Error::Simple "Odd number of parameters in call to "
+          . ref($self)
+          . "::init()";
+    }
+
+    my %attrs = @_;
 
     # check for Plugins.pm versions
     my $expectedVer = 0.77;
     if ( $Foswiki::Plugins::VERSION < $expectedVer ) {
-        _warning
+        $self->warning(
 "Version mismatch between DatabaseContrib.pm and Plugins.pm (expecting: $expectedVer, get: "
-          . $Foswiki::Plugins::VERSION . ")";
+              . $Foswiki::Plugins::VERSION
+              . ")" );
+        return undef;
+    }
+
+    unless ( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) {
+        $self->warning("No connections defined.");
+        return 0;
+    }
+    unless (
+        ref( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) eq
+        'HASH' )
+    {
+        $self->warning(
+'$Foswiki::cfg{Extensions}{DatabaseContrib}{connections} entry is not a HASH ref.'
+        );
         return 0;
     }
 
-    my $connections = $Foswiki::cfg{Extensions}{DatabaseContrib}{connections};
-    unless ($connections) {
-        _warning "No connections defined.";
-        return 0;
-    }
-    %dbi_connections = %$connections;
+   # Never give a chance of accidental mangling with the original configuration.
+   # It is mostly related to tests.
+    $self->_cache( 'connections',
+        $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} );
 
-    # Contrib correctly initialized
-    return ( $INIT_COMPLETE = 1 );
+    if ( defined $attrs{allow_mapping} ) {
+        $self->_cache( allow_mapping => $attrs{allow_mapping} );
+    }
+
+    return $self;
+}
+
+sub connected {
+    my $self = shift;
+    my ($conname) = @_;
+
+    return ( defined( $self->{_dbh} ) && defined( $self->{_dbh}{$conname} ) );
+}
+
+sub dbh {
+    my $self = shift;
+    my ($conname) = @_;
+
+    return undef unless $self->connected($conname);
+    return $self->{_dbh}{$conname};
+}
+
+sub db_init {
+    $db_object = Foswiki::Contrib::DatabaseContrib->new(@_);
+    return $db_object;
 }
 
 sub db_connected {
     _check_init;
 
-    my ($conname) = @_;
-
-    return undef unless defined $dbi_connections{$conname};
-    return defined $dbi_connections{$conname}{dbh};
+    return defined $db_object->connected(@_);
 }
 
 sub _set_codepage {
-    my $conname    = shift;
-    my $connection = $dbi_connections{$conname};
+    my $self       = shift;
+    my ($conname)  = @_;
+    my $connection = $self->_cache('connections')->{$conname};
+    my $dbh        = $self->dbh($conname);
+
     if ( $connection->{codepage} ) {
 
         # SETTING CODEPAGE $connection->{codepage} for $conname\n";
         if ( $connection->{driver} =~ /^(mysql|Pg)$/ ) {
-            $connection->{dbh}->do("SET NAMES $connection->{codepage}");
+            $dbh->do("SET NAMES $connection->{codepage}");
             if ( $connection->{driver} eq 'mysql' ) {
-                $connection->{dbh}
-                  ->do("SET CHARACTER SET $connection->{codepage}");
+                $dbh->do("SET CHARACTER SET $connection->{codepage}");
             }
         }
     }
@@ -132,6 +237,7 @@ sub _set_codepage {
 # Finds mapping of a user in a list of users or groups.
 # Returns matched entry from $allow_map list
 sub _find_mapping {
+    my $self = shift;
     my ( $mappings, $user ) = @_;
 
 #say STDERR "_find_mapping(", join(",", map {$_ // '*undef*'} @_), ")";
@@ -167,21 +273,21 @@ sub _find_mapping {
 # $conname - connection name from the configutation
 # $section – page we're checking access for in form Web.Topic
 # $access_type - one of the allow_* keys.
-my %map_inclusions = ( allow_query => 'allow_do', );
+sub access_allowed {
+    my $self = shift;
+    my ( $conname, $web, $access_type, $user ) = @_;
 
-sub db_access_allowed {
-    _check_init;
-    my ( $conname, $section, $access_type, $user ) = @_;
+    my $connection = $self->_cache('connections')->{$conname};
 
     #say STDERR "db_access_allowed(", join(",", map {$_ // '*undef*'} @_), ")";
 
-    unless ( defined $dbi_connections{$conname} ) {
+    unless ( defined $connection ) {
 
         #say STDERR "No $conname in connections";
-        return 0 if _failure "No connection $conname in the configuration";
+        return 0 if $self->_fail("No connection $conname in the configuration");
     }
 
-    my $connection = $dbi_connections{$conname};
+    my $allow_mapping = $self->_cache('allow_mapping') // {};
 
     #say STDERR "\$connection: ", Dumper($connection);
 
@@ -196,40 +302,44 @@ sub db_access_allowed {
 
     if ( defined $connection->{$access_type} ) {
 
-        #say STDERR "Checking $user of $conname at $section";
+        #say STDERR "Checking $user of $conname at $web";
 
-        my $final_section =
-          defined( $connection->{$access_type}{$section} )
-          ? $section
+        my $final_web =
+          defined( $connection->{$access_type}{$web} )
+          ? $web
           : "default";
 
-#say STDERR "Final section would be $final_section: $connection->{$access_type}";
+       #say STDERR "Final web would be $final_web: $connection->{$access_type}";
         my $allow_map =
-          defined( $connection->{$access_type}{$final_section} )
+          defined( $connection->{$access_type}{$final_web} )
           ? (
-            ref( $connection->{$access_type}{$final_section} ) eq 'ARRAY'
-            ? $connection->{$access_type}{$final_section}
+            ref( $connection->{$access_type}{$final_web} ) eq 'ARRAY'
+            ? $connection->{$access_type}{$final_web}
             : [
-                ref( $connection->{$access_type}{$final_section} )
+                ref( $connection->{$access_type}{$final_web} )
                 ? ()
-                : $connection->{$access_type}{$final_section}
+                : $connection->{$access_type}{$final_web}
             ]
           )
           : [];
-        $match = _find_mapping( $allow_map, $user );
+        $match = $self->_find_mapping( $allow_map, $user );
 
         #say STDERR "Match result: ", $match // '*undef*';
     }
-    if ( !defined($match) && defined( $map_inclusions{$access_type} ) ) {
+    if ( !defined($match) && defined( $allow_mapping->{$access_type} ) ) {
 
 # Check for higher level access map if feasible.
 #say STDERR "No match found, checking for higher level access map $map_inclusions{$access_type}";
-        return db_access_allowed( $conname, $section,
-            $map_inclusions{$access_type}, $user );
+        return $self->access_allowed( $conname, $web,
+            $allow_mapping->{$access_type}, $user );
     }
 
-    # TODO User-defined map_inclusions in %dbi_connections.
     return defined $match;
+}
+
+sub db_access_allowed {
+    _check_init;
+    return $db_object->access_allowed(@_);
 }
 
 # db_allowed is deprecated and kept for compatibility matters only.
