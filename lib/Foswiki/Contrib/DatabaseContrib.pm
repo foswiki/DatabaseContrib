@@ -15,6 +15,7 @@ use Foswiki::Func;
 use CGI qw(:html2);
 use Carp qw(longmess);
 use Storable qw(dclone);
+use Time::HiRes qw(time);
 use Data::Dumper;
 
 # $VERSION is referred to by Foswiki, and is the only global variable that
@@ -32,7 +33,7 @@ use Data::Dumper;
 #   v1.2.1_001 -> v1.2.2 -> v1.2.2_001 -> v1.2.3
 #   1.21_001 -> 1.22 -> 1.22_001 -> 1.23
 #
-our $VERSION = '1.02_001';
+use version; our $VERSION = version->declare('v1.02_001');
 
 # $RELEASE is used in the "Find More Extensions" automation in configure.
 # It is a manually maintained string used to identify functionality steps.
@@ -111,7 +112,7 @@ sub _fail {
 sub _check_init {
     die
 "DatabaseContrib has not been initalized yet. Call db_init() before use please."
-      unless defined($db_oject)
+      unless defined($db_object)
       && $db_object->isa('Foswiki::Contrib::DatabaseContrib');
 }
 
@@ -128,8 +129,6 @@ sub _cache {
     my ( $key, $data ) = @_;
 
     if ( @_ > 1 ) {
-
-# TODO If we gonna rely on time value to check validity of the cache then time granularity isn't sufficient.
         $self->{_cached}{$key} = {
             time => time,
             data => dclone($data),
@@ -137,8 +136,7 @@ sub _cache {
     }
     return undef
       unless defined $self->{_cached} && defined $self->{_cached}{$key};
-    return
-      wantarray
+    return wantarray
       ? ( @{ $self->{_cached}{$key} }{qw(time data)} )
       : $self->{_cached}{$key}{data};
 }
@@ -194,6 +192,8 @@ sub connected {
     my $self = shift;
     my ($conname) = @_;
 
+    #say STDERR "{_dbh} = ", Dumper($self->{_dbh});
+
     return ( defined( $self->{_dbh} ) && defined( $self->{_dbh}{$conname} ) );
 }
 
@@ -206,14 +206,16 @@ sub dbh {
 }
 
 sub db_init {
-    $db_object = Foswiki::Contrib::DatabaseContrib->new(@_);
+    $db_object =
+      Foswiki::Contrib::DatabaseContrib->new( @_,
+        allow_mapping => { allow_query => 'allow_do' } );
     return $db_object;
 }
 
 sub db_connected {
     _check_init;
 
-    return defined $db_object->connected(@_);
+    return $db_object->connected(@_);
 }
 
 sub _set_codepage {
@@ -342,7 +344,7 @@ sub db_access_allowed {
     return $db_object->access_allowed(@_);
 }
 
-# db_allowed is deprecated and kept for compatibility matters only.
+# db_allowed is deprecated and is been kept for compatibility matters only.
 sub db_allowed {
     _check_init;
     my ( $conname, $section ) = @_;
@@ -350,33 +352,35 @@ sub db_allowed {
     return db_access_allowed( $conname, $section, 'allow_do' );
 }
 
-sub db_connect {
-    _check_init;
+sub connect {
+    my $self    = shift;
     my $conname = shift;
-    unless ( exists $dbi_connections{$conname} ) {
+
+    my $connection = $self->_cache('connections')->{$conname};
+    unless ( defined $connection ) {
         return
           if _failure "No connection `$conname' defined in the cofiguration";
     }
-    my $connection      = $dbi_connections{$conname};
+
+    my $dbh = $self->dbh($conname);
+
+    return $dbh if defined $dbh;
+
     my @required_fields = qw(database driver);
 
     unless ( defined $connection->{dsn} ) {
         foreach my $field (@required_fields) {
             unless ( defined $connection->{$field} ) {
                 return
-                  if _failure
-"Required field $field is not defined for database connection $conname.\n";
+                  if $self->fail(
+"Required field $field is not defined for database connection $conname.\n"
+                  );
             }
         }
     }
 
     my ( $dbuser, $dbpass ) =
-      ( $connection->{user} || "", $connection->{password} || "" );
-
-    # $connection->{user} may be undef for cases where connection doesn't
-    # require username but general allowance of access to the DB is granted
-    # to all Wiki users.
-    my $access_allowed = exists $connection->{user};
+      ( $connection->{user} // "", $connection->{password} // "" );
 
     if ( defined( $connection->{usermap} ) ) {
 
@@ -387,81 +391,93 @@ sub db_connect {
 
         my $usermap_key = _find_mapping( \@maps );
         if ($usermap_key) {
-            $dbuser         = $connection->{usermap}{$usermap_key}{user};
-            $dbpass         = $connection->{usermap}{$usermap_key}{password};
-            $access_allowed = 1;
+            $dbuser = $connection->{usermap}{$usermap_key}{user};
+            $dbpass = $connection->{usermap}{$usermap_key}{password};
         }
-    }
-
-    unless ($access_allowed) {
-        return
-          if _failure
-          "User/password are not defined for database connection $conname";
     }
 
 # CONNECTING TO $conname, ", (defined $connection->{dbh} ? $connection->{dbh} : "*undef*"), ", ", (defined $dbi_connections{$conname}{dbh} ? $dbi_connections{$conname}{dbh} : "*undef*"), "\n";
-    unless ( $connection->{dbh} ) {
 
-        # CONNECTING TO $conname\n";
-        my $dsn;
-        if ( defined $connection->{dsn} ) {
-            $dsn = $connection->{dsn};
-        }
-        else {
-            my $server =
-              $connection->{server} ? "server=$connection->{server};" : "";
-            $dsn =
+    # CONNECTING TO $conname\n";
+    my $dsn;
+    if ( defined $connection->{dsn} ) {
+        $dsn = $connection->{dsn};
+    }
+    else {
+        my $server =
+          $connection->{server} ? "server=$connection->{server};" : "";
+        $dsn =
 "dbi:$connection->{driver}\:${server}database=$connection->{database}";
-            $dsn .= ";host=$connection->{host}" if $connection->{host};
-        }
+        $dsn .= ";host=$connection->{host}" if $connection->{host};
+    }
 
-        my @drv_attrs;
-        if ( defined $connection->{driver_attributes}
-            && ref( $connection->{driver_attributes} ) eq 'HASH' )
+    my @drv_attrs;
+    if ( defined $connection->{driver_attributes}
+        && ref( $connection->{driver_attributes} ) eq 'HASH' )
+    {
+        @drv_attrs = map { $_ => $connection->{driver_attributes}{$_} }
+          grep { !/^(?:RaiseError|PrintError|FetchHashKeyName)$/ }
+          keys %{ $connection->{driver_attributes} };
+
+    }
+    $dbh = DBI->connect(
+        $dsn, $dbuser, $dbpass,
         {
-            @drv_attrs =
-              map { $_ => $connection->{driver_attributes}{$_} }
-              grep { !/^(?:RaiseError|PrintError|FetchHashKeyName)$/ }
-              keys %{ $connection->{driver_attributes} };
-
+            RaiseError       => 1,
+            PrintError       => 1,
+            FetchHashKeyName => NAME_lc => @drv_attrs,
+            @_
         }
-        my $dbh = DBI->connect(
-            $dsn, $dbuser, $dbpass,
-            {
-                RaiseError       => 1,
-                PrintError       => 1,
-                FetchHashKeyName => NAME_lc => @drv_attrs,
-                @_
-            }
-        );
-        unless ( defined $dbh ) {
+    );
+    unless ( defined $dbh ) {
 
 #	        throw Error::Simple("DBI connect error for connection $conname: $DBI::errstr");
-            return;
-        }
-        $connection->{dbh} = $dbh;
+        $self->_cache( 'errors',
+            { $conname => { errstr => $DBI::errstr, err => $DBI::err } } );
+        return undef;
     }
 
-    _set_codepage($conname);
+    $self->{_dbh}{$conname} = $dbh;
+
+    $self->_set_codepage($conname);
 
     if ( defined $connection->{init} ) {
-        $connection->{dbh}->do( $connection->{init} );
+        $dbh->do( $connection->{init} );
     }
 
-    return $connection->{dbh};
+    #say STDERR "Connected to $conname";
+
+    return $dbh;
+}
+
+sub db_connect {
+    _check_init;
+    return $db_object->connect(@_);
+}
+
+sub disconnect {
+    my $self        = shift;
+    my $connections = $self->_cache('connections');
+    my @connames    = scalar(@_) > 0 ? @_ : keys %$connections;
+    foreach my $conname (@connames) {
+
+        #say STDERR "Disconnecting $conname";
+        if ( $self->connected($conname) ) {
+            my $dbh = $self->{_dbh}{$conname};
+            $dbh->commit unless $dbh->{AutoCommit};
+            $dbh->disconnect;
+            delete $self->{_dbh}{$conname};
+        }
+    }
 }
 
 sub db_disconnect {
     _check_init;
-    my @connections = scalar(@_) > 0 ? @_ : keys %dbi_connections;
-    foreach my $conname (@connections) {
-        if ( $dbi_connections{$conname}{dbh} ) {
-            $dbi_connections{$conname}{dbh}->commit
-              unless $dbi_connections{$conname}{dbh}{AutoCommit};
-            $dbi_connections{$conname}{dbh}->disconnect;
-            delete $dbi_connections{$conname}{dbh};
-        }
-    }
+    return $db_object->disconnect(@_);
+}
+
+sub DESTROY {
+    shift->disconnect;
 }
 
 1;

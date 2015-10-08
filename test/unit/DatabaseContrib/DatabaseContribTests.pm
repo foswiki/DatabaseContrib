@@ -1,4 +1,4 @@
-use v5.16;
+use v5.10;
 use strict;
 
 package DatabaseContribTests;
@@ -12,6 +12,7 @@ use Foswiki::Func;
 use File::Temp;
 use Foswiki::Contrib::DatabaseContrib qw(:all);
 use Data::Dumper;
+use version;
 
 sub new {
     my $self = shift()->SUPER::new(@_);
@@ -320,7 +321,7 @@ sub test_attributes {
 sub test_version {
     my $this = shift;
 
-    my $required_ver = 1.01;
+    my $required_ver = version->parse("v1.02_001");
 
     $this->assert(
         $Foswiki::Contrib::DatabaseContrib::VERSION == $required_ver,
