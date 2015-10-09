@@ -5,3 +5,4 @@ Exporter,>=0,cpan,May be required for lib/Foswiki/Contrib/DatabaseContrib.pm
 Foswiki::Func,>=0,cpan,Basic API
 Time::HiRes,>=0,cpan,HiRes time value
 Storable,>=0,cpan,Required for cloning data structures
+Clone,>=0,cpan,Required for fast cloning of simple structures

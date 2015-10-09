@@ -15,6 +15,7 @@ use Foswiki::Func;
 use CGI qw(:html2);
 use Carp qw(longmess);
 use Storable qw(dclone);
+use Clone qw(clone);
 use Time::HiRes qw(time);
 use Data::Dumper;
 
@@ -105,12 +106,13 @@ sub _fail {
         throw Error::Simple -text => join( '', @_ );
     }
     else {
+        $self->warning(@_);
         return 1;
     }
 }
 
 sub _check_init {
-    die
+    throw Error::Simple -text =>
 "DatabaseContrib has not been initalized yet. Call db_init() before use please."
       unless defined($db_object)
       && $db_object->isa('Foswiki::Contrib::DatabaseContrib');
@@ -141,6 +143,9 @@ sub _cache {
       : $self->{_cached}{$key}{data};
 }
 
+# NOTE: The init() method has to take into consideration the fact that it
+# is allowed to be called more than once as it might be required to
+# reconfigure the object.
 sub init {
     my $self = shift;
 
@@ -153,7 +158,7 @@ sub init {
     my %attrs = @_;
 
     # check for Plugins.pm versions
-    my $expectedVer = 0.77;
+    my $expectedVer = version->parse('0.77');
     if ( $Foswiki::Plugins::VERSION < $expectedVer ) {
         $self->warning(
 "Version mismatch between DatabaseContrib.pm and Plugins.pm (expecting: $expectedVer, get: "
@@ -164,7 +169,7 @@ sub init {
 
     unless ( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) {
         $self->warning("No connections defined.");
-        return 0;
+        return undef;
     }
     unless (
         ref( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) eq
@@ -173,7 +178,7 @@ sub init {
         $self->warning(
 '$Foswiki::cfg{Extensions}{DatabaseContrib}{connections} entry is not a HASH ref.'
         );
-        return 0;
+        return undef;
     }
 
    # Never give a chance of accidental mangling with the original configuration.
@@ -181,12 +186,16 @@ sub init {
     $self->_cache( 'connections',
         $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} );
 
-    if ( defined $attrs{allow_mapping} ) {
-        $self->_cache( allow_mapping => $attrs{allow_mapping} );
+    if ( defined $attrs{acl_inheritance} ) {
+        $self->add_acl_inheritance( %{ $attrs{acl_inheritance} } );
     }
 
     return $self;
 }
+
+# Aliacing for readability.
+*Foswiki::Contrib::DatabaseContrib::reinit =
+  \&Foswiki::Contrib::DatabaseContrib::init;
 
 sub connected {
     my $self = shift;
@@ -205,19 +214,6 @@ sub dbh {
     return $self->{_dbh}{$conname};
 }
 
-sub db_init {
-    $db_object =
-      Foswiki::Contrib::DatabaseContrib->new( @_,
-        allow_mapping => { allow_query => 'allow_do' } );
-    return $db_object;
-}
-
-sub db_connected {
-    _check_init;
-
-    return $db_object->connected(@_);
-}
-
 sub _set_codepage {
     my $self       = shift;
     my ($conname)  = @_;
@@ -234,6 +230,27 @@ sub _set_codepage {
             }
         }
     }
+}
+
+sub add_acl_inheritance {
+    my $self = shift;
+
+    $self->fail( "Odd number of elements in call to "
+          . ref($self)
+          . "::add_acl_inheritance()" )
+      unless scalar(@_) % 2 == 0;
+
+    my $acl_inheritance = $self->_cache('acl_inheritance') // {};
+
+    while (@_) {
+        my ( $child, $parent ) = splice @_, 0, 2;
+
+        #say STDERR "Adding parent ACL $parent to $child";
+        push @{ $acl_inheritance->{$child} },
+          ( ref($parent) eq 'ARRAY' ? @$parent : $parent );
+    }
+
+    $self->_cache( 'acl_inheritance', $acl_inheritance );
 }
 
 # Finds mapping of a user in a list of users or groups.
@@ -273,25 +290,40 @@ sub _find_mapping {
 }
 
 # $conname - connection name from the configutation
-# $section – page we're checking access for in form Web.Topic
+# $topic – page we're checking access for in form Web.Topic
 # $access_type - one of the allow_* keys.
+# $user - user we're checking access for. Currently logged in one if undefined.
+# $checked_atoms – hash of already checked out allow_* keys. Used to avoid circular dependencies.
 sub access_allowed {
     my $self = shift;
-    my ( $conname, $web, $access_type, $user ) = @_;
+    my ( $conname, $topic, $access_type, $user, $checked_atoms ) = @_;
+
+    $checked_atoms //= { _order => [], _nesting => 0 };
+    my $nesting = $checked_atoms->{_nesting};
+
+    if ( $checked_atoms->{$access_type} ) {
+        $self->_fail( "Circular dependecy detected for $access_type: "
+              . join( ' -> ', @{ $checked_atoms->{_order} } ) );
+        return undef;
+    }
+
+    $checked_atoms->{$access_type} = 1;
+    push @{ $checked_atoms->{_order} }, $access_type;
 
     my $connection = $self->_cache('connections')->{$conname};
 
-    #say STDERR "db_access_allowed(", join(",", map {$_ // '*undef*'} @_), ")";
+#say STDERR "  " x $nesting, "access_allowed(", join(",", map {$_ // '*undef*'} @_), ")";
 
     unless ( defined $connection ) {
 
-        #say STDERR "No $conname in connections";
-        return 0 if $self->_fail("No connection $conname in the configuration");
+        #say STDERR "  " x $nesting, "No $conname in connections";
+        return undef
+          if $self->_fail("No connection $conname in the configuration");
     }
 
-    my $allow_mapping = $self->_cache('allow_mapping') // {};
+    my $acl_inheritance = $self->_cache('acl_inheritance') // {};
 
-    #say STDERR "\$connection: ", Dumper($connection);
+   #say STDERR "  " x $nesting, "\$acl_inheritance: ", Dumper($acl_inheritance);
 
     # Defines map priorities. Thus, no point to specify additional
     # allow_query access right if allow_do has been defined for a topic
@@ -304,52 +336,48 @@ sub access_allowed {
 
     if ( defined $connection->{$access_type} ) {
 
-        #say STDERR "Checking $user of $conname at $web";
+        #say STDERR "  " x $nesting, "Checking $user of $conname at $topic";
 
-        my $final_web =
-          defined( $connection->{$access_type}{$web} )
-          ? $web
+        my $final_topic =
+          defined( $connection->{$access_type}{$topic} )
+          ? $topic
           : "default";
 
-       #say STDERR "Final web would be $final_web: $connection->{$access_type}";
+#say STDERR "  " x $nesting, "Final topic would be $final_topic: $connection->{$access_type}";
         my $allow_map =
-          defined( $connection->{$access_type}{$final_web} )
+          defined( $connection->{$access_type}{$final_topic} )
           ? (
-            ref( $connection->{$access_type}{$final_web} ) eq 'ARRAY'
-            ? $connection->{$access_type}{$final_web}
+            ref( $connection->{$access_type}{$final_topic} ) eq 'ARRAY'
+            ? $connection->{$access_type}{$final_topic}
             : [
-                ref( $connection->{$access_type}{$final_web} )
+                ref( $connection->{$access_type}{$final_topic} )
                 ? ()
-                : $connection->{$access_type}{$final_web}
+                : $connection->{$access_type}{$final_topic}
             ]
           )
           : [];
         $match = $self->_find_mapping( $allow_map, $user );
 
-        #say STDERR "Match result: ", $match // '*undef*';
+#say STDERR "  " x $nesting, "Match result for $user on $topic for $conname: ", $match // '*undef*';
     }
-    if ( !defined($match) && defined( $allow_mapping->{$access_type} ) ) {
+    if ( !defined($match) && defined( $acl_inheritance->{$access_type} ) ) {
+        ( local $checked_atoms->{_nesting} )++;
 
-# Check for higher level access map if feasible.
-#say STDERR "No match found, checking for higher level access map $map_inclusions{$access_type}";
-        return $self->access_allowed( $conname, $web,
-            $allow_mapping->{$access_type}, $user );
+        # Check for parent ACL if there is one or few.
+        foreach my $parent_acl ( @{ $acl_inheritance->{$access_type} } ) {
+
+#say STDERR "  " x $nesting, "No match found, checking for higher level access map $parent_acl";
+            $match =
+              $self->access_allowed( $conname, $topic, $parent_acl, $user,
+                clone($checked_atoms) );
+
+#say STDERR "  " x $nesting, "Got '" . ($match // '*undef*') . "' for $parent_acl";
+            last if defined $match;
+        }
     }
 
-    return defined $match;
-}
-
-sub db_access_allowed {
-    _check_init;
-    return $db_object->access_allowed(@_);
-}
-
-# db_allowed is deprecated and is been kept for compatibility matters only.
-sub db_allowed {
-    _check_init;
-    my ( $conname, $section ) = @_;
-
-    return db_access_allowed( $conname, $section, 'allow_do' );
+#say STDERR "  " x $nesting, "Returning $access_type result for $user on $topic for $conname: '", $match // '*undef*', "'";
+    return $match;
 }
 
 sub connect {
@@ -389,7 +417,7 @@ sub connect {
           sort { ( $a =~ /Group$/ ) <=> ( $b =~ /Group$/ ) }
           keys %{ $connection->{usermap} };
 
-        my $usermap_key = _find_mapping( \@maps );
+        my $usermap_key = $self->_find_mapping( \@maps );
         if ($usermap_key) {
             $dbuser = $connection->{usermap}{$usermap_key}{user};
             $dbpass = $connection->{usermap}{$usermap_key}{password};
@@ -450,34 +478,66 @@ sub connect {
     return $dbh;
 }
 
-sub db_connect {
-    _check_init;
-    return $db_object->connect(@_);
-}
-
 sub disconnect {
     my $self        = shift;
     my $connections = $self->_cache('connections');
     my @connames    = scalar(@_) > 0 ? @_ : keys %$connections;
     foreach my $conname (@connames) {
 
-        #say STDERR "Disconnecting $conname";
+        #say STDERR "Trying to disconnect $conname";
         if ( $self->connected($conname) ) {
+
+            #say STDERR "Disconnecting previously connected $conname";
             my $dbh = $self->{_dbh}{$conname};
             $dbh->commit unless $dbh->{AutoCommit};
             $dbh->disconnect;
             delete $self->{_dbh}{$conname};
         }
     }
+
+    #say STDERR Dumper( $self->{_dbh} );
+}
+
+sub DESTROY {
+    shift->disconnect;
+}
+
+# ---- Procedural interface.
+
+sub db_init {
+    $db_object =
+      Foswiki::Contrib::DatabaseContrib->new( @_,
+        acl_inheritance => { allow_query => 'allow_do' } );
+    return $db_object;
+}
+
+sub db_connected {
+    _check_init;
+
+    return $db_object->connected(@_);
+}
+
+sub db_access_allowed {
+    _check_init;
+    return $db_object->access_allowed(@_);
+}
+
+# db_allowed is deprecated and is been kept for compatibility matters only.
+sub db_allowed {
+    _check_init;
+    my ( $conname, $section ) = @_;
+
+    return db_access_allowed( $conname, $section, 'allow_do' );
+}
+
+sub db_connect {
+    _check_init;
+    return $db_object->connect(@_);
 }
 
 sub db_disconnect {
     _check_init;
     return $db_object->disconnect(@_);
-}
-
-sub DESTROY {
-    shift->disconnect;
 }
 
 1;

@@ -7,6 +7,6 @@ sub name { 'DatabaseContribSuite' }
 
 # List the modules that contain the extension-specific tests you
 # want to run. These tests are run when you 'perl build.pl test'
-sub include_tests { qw(DatabaseContribTests) }
+sub include_tests { qw( DatabaseContribOOTests DatabaseContribTests ) }
 
 1;
