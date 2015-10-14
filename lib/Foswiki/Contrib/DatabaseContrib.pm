@@ -83,7 +83,7 @@ sub _warning (@) {
     return Foswiki::Func::writeWarning(@_);
 }
 
-sub warning {
+sub _warn {
     my $self = shift;
     return Foswiki::Func::writeWarning(@_);
 }
@@ -106,7 +106,7 @@ sub _fail {
         throw Error::Simple -text => join( '', @_ );
     }
     else {
-        $self->warning(@_);
+        $self->_warn(@_);
         return 1;
     }
 }
@@ -116,14 +116,6 @@ sub _check_init {
 "DatabaseContrib has not been initalized yet. Call db_init() before use please."
       unless defined($db_object)
       && $db_object->isa('Foswiki::Contrib::DatabaseContrib');
-}
-
-sub new {
-    my $self = bless {}, shift;
-
-    $self->init(@_);
-
-    return $self;
 }
 
 sub _cache {
@@ -136,11 +128,57 @@ sub _cache {
             data => dclone($data),
         };
     }
+
     return undef
       unless defined $self->{_cached} && defined $self->{_cached}{$key};
+
     return wantarray
       ? ( @{ $self->{_cached}{$key} }{qw(time data)} )
       : $self->{_cached}{$key}{data};
+}
+
+# Finds mapping of a user in a list of users or groups.
+# Returns matched entry from $allow_map list
+sub _find_mapping {
+    my $self = shift;
+    my ( $mappings, $user ) = @_;
+
+#say STDERR "_find_mapping(", join(",", map {$_ // '*undef*'} @_), ")";
+#say STDERR "Mappings list: [", join(",", map {$_ // '*undef*'} @$mappings), "]";
+
+    $user = Foswiki::Func::getWikiUserName( $user ? $user : () );
+    my $found = 0;
+    my $match;
+    foreach my $entity (@$mappings) {
+        $match = $entity;
+
+        #say STDERR "Matching $user against $entity";
+
+        # Checking for access of $user within $entity
+        if ( Foswiki::Func::isGroup($entity) ) {
+
+            # $entity is a group
+            #say STDERR "$entity is a group";
+            $found =
+              Foswiki::Func::isGroupMember( $entity, $user, { expand => 1 } );
+        }
+        else {
+            $entity = Foswiki::Func::getWikiUserName($entity);
+
+            #say STDERR "$entity is a user";
+            $found = ( $user eq $entity );
+        }
+        last if $found;
+    }
+    return $found ? $match : undef;
+}
+
+sub new {
+    my $self = bless {}, shift;
+
+    return undef unless $self->init(@_);
+
+    return $self;
 }
 
 # NOTE: The init() method has to take into consideration the fact that it
@@ -158,24 +196,24 @@ sub init {
     my %attrs = @_;
 
     # check for Plugins.pm versions
+    # TODO I think this is better be done in the new() method.
     my $expectedVer = version->parse('0.77');
     if ( $Foswiki::Plugins::VERSION < $expectedVer ) {
-        $self->warning(
-"Version mismatch between DatabaseContrib.pm and Plugins.pm (expecting: $expectedVer, get: "
-              . $Foswiki::Plugins::VERSION
-              . ")" );
-        return undef;
+        throw Error::Simple
+          "Version mismatch between DatabaseContrib.pm and Plugins.pm"
+          . " (expected: $expectedVer, got: "
+          . $Foswiki::Plugins::VERSION . ")";
     }
 
     unless ( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) {
-        $self->warning("No connections defined.");
+        $self->_warn("No connections defined.");
         return undef;
     }
     unless (
         ref( $Foswiki::cfg{Extensions}{DatabaseContrib}{connections} ) eq
         'HASH' )
     {
-        $self->warning(
+        $self->_warn(
 '$Foswiki::cfg{Extensions}{DatabaseContrib}{connections} entry is not a HASH ref.'
         );
         return undef;
@@ -251,42 +289,6 @@ sub add_acl_inheritance {
     }
 
     $self->_cache( 'acl_inheritance', $acl_inheritance );
-}
-
-# Finds mapping of a user in a list of users or groups.
-# Returns matched entry from $allow_map list
-sub _find_mapping {
-    my $self = shift;
-    my ( $mappings, $user ) = @_;
-
-#say STDERR "_find_mapping(", join(",", map {$_ // '*undef*'} @_), ")";
-#say STDERR "Mappings list: [", join(",", map {$_ // '*undef*'} @$mappings), "]";
-
-    $user = Foswiki::Func::getWikiUserName( $user ? $user : () );
-    my $found = 0;
-    my $match;
-    foreach my $entity (@$mappings) {
-        $match = $entity;
-
-        #say STDERR "Matching $user against $entity";
-
-        # Checking for access of $user within $entity
-        if ( Foswiki::Func::isGroup($entity) ) {
-
-            # $entity is a group
-            #say STDERR "$entity is a group";
-            $found =
-              Foswiki::Func::isGroupMember( $entity, $user, { expand => 1 } );
-        }
-        else {
-            $entity = Foswiki::Func::getWikiUserName($entity);
-
-            #say STDERR "$entity is a user";
-            $found = ( $user eq $entity );
-        }
-        last if $found;
-    }
-    return $found ? $match : undef;
 }
 
 # $conname - connection name from the configutation
@@ -399,7 +401,7 @@ sub connect {
     unless ( defined $connection->{dsn} ) {
         foreach my $field (@required_fields) {
             unless ( defined $connection->{$field} ) {
-                return
+                return undef
                   if $self->fail(
 "Required field $field is not defined for database connection $conname.\n"
                   );
@@ -459,9 +461,6 @@ sub connect {
     );
     unless ( defined $dbh ) {
 
-#	        throw Error::Simple("DBI connect error for connection $conname: $DBI::errstr");
-        $self->_cache( 'errors',
-            { $conname => { errstr => $DBI::errstr, err => $DBI::err } } );
         return undef;
     }
 
@@ -471,6 +470,12 @@ sub connect {
 
     if ( defined $connection->{init} ) {
         $dbh->do( $connection->{init} );
+    }
+
+    if ( defined $connection->{callback}
+        && ref( $connection->{callback} ) eq 'CODE' )
+    {
+        $connection->{callback}->( $self, $dbh );
     }
 
     #say STDERR "Connected to $conname";

@@ -12,25 +12,21 @@ One line description, required for extensions repository catalog.
 
 ---++ Summary of Contents
 
-This contrib provides subroutines that come in handy when accessing a SQL database.
+This contrib provides API that come in handy when accessing a SQL database.
+The API implemented using two different approaches: OO and procedural.
+While OO is the default procedural is been kept for compatibility matters
+only and it's use is strongly discouraged. 
 
-   * [[#DbInit][=db_init=]] initializes the module
-   * [[#DbConnect][=db_connect=]] connects to a SQL database
-   * [[#DbConnected][=db_connected=]] verifies that a connection exists for a database
-   * [[#DbDisconnect][=db_disconnect=]] disconnects from all databases
-   * [[#DbAccessAllowed][=db_access_allowed=]] tests for additional access permissions
-
-This contrib is used among others, by Foswiki:Plugins.DBIQueryPlugin. The hope is that we can consolidate the many different database connection schemes currently in use into this single contrib.
+This contrib is used among others, by
+%WIKITOOLNAME%:Extensions.DBIQueryPlugin. The hope is that we can
+consolidate the many different database connection schemes currently in use
+into this single contrib.
 
 ---++ Detailed Documentation
 
-This plugin has its origins in Foswiki:Plugins.DBIQueryPlugin. Additional
-capabilities have been migrated from other database connection mechanisms
-deployed in various TWiki plugins.
-
-This plugin uses the database independent access methods in CPAN:DBI to
+This plugin uses the database independent access methods in =CPAN:DBI= to
 facilitate access to the SQL database. In the following =$dbh= refers to
-the database handle abstraction of CPAN:DBI.
+the database handle abstraction of =CPAN:DBI=.
 
 ---+++ Conventions
 
@@ -39,38 +35,108 @@ The following conventions are used across this documentation:
 |  *Notations*  ||
 |=[ $some_argument ]=|Subroutine aguments enclosed in square brackets are optional|
 |=...=|0 or more arguments of the same kind as the one preceding the triple-dot element|
+|=(X|Y|Z)=|For return values means that method would return one of the listed values.|
 |  *Typical arguments or variables*  ||
-|=$dbname=|Database name defined in [[#DatabaseConfig][Database Definition]]|
+|=$dbname=|Database name defined in [[#DatabaseConfig][Database Definition]] |
 |=$dbh=|Database handle as used in =CPAN:DBI= documentation|
+|=$dbc=|DatabaseContrib object|
 |=$user=|%WIKITOOLNAME% user name. In most cases might be in any valid form: long, short or login name - unless otherwise specified in the documentation|
 |=$topic=|%WIKITOOLNAME% topic name. May or may not include web named part unless otherwise specified in the documentation|
 
-#DbInit
----+++ =db_init ( )=
+---+++ Object Oriented API
 
-Initializes the module. Must be called before any other subroutines or if content of =$Foswiki::cfg{Extensions}{DatabaseContrib}{connections}= has been changed. The latter is mostly related to writing test units.
+#DbcNew
+---++++ =new ( attribute => value, ... ) -> $dbc=
 
-#DbConnect
----+++ =db_connect ( $dbname ) -> ( $dbh )=
+Creates a new =%WIKITOOLNAME%::Contrib::DatabaseContrib= object and initializes it. =attribute/value= pairs are object configuration parameters being passed over to [[#DbcInit][=init()=]] method.
 
-Connects to the database indicated by =$dbname=. The database can then be queried or updated.
+*Returns*: reference to a newly created object or =undef= on failure.
 
-#DbConnected
----+++ =db_connected ( $dbname ) -> ( undef|0|1 )=
+#DbcInit
+---++++ =init( attribute => value, ... ), reinit( attribute => value, ... ) -> $dbc=
 
-Checks if there is initialized =dbh= for database defined by =$dbname=. Returns undef if database defined by =$dbname= is missing in database definitions.
+Initializes a =%WIKITOOLNAME%::Contrib::DatabaseContrib= object using optional =attribute/value= pairs.
 
-#DbDisconnect
----+++ =db_disconnect ( [ $dbname, ... ] )=
+For the moment the only attribute accepted by the method is =acl_inheritance= hashref.
 
-Disconnects from the databases which names listed in the argumets. Disconnects all connected databases if the list is empty.
+This method does not rely on previous object state and could be used
+anytime throughout the object's life cycle. This is what =reinit()= method
+is here for: it's a pure alias for =init()= but it makes the code a little bit
+more readable.
 
-#DbAccessAllowed
----+++ =db_access_allowed ( $dbname, $topic, $access_type [, $user ] )=
+*Returns*: =undef= on soft errors, =$dbc= on success.
 
-Verifies user's permissions of type =$access_type= for a database defined by =$dbname= in a topic defined by =$topic=. If =$user= argument is omitted then permissions are checked for the currently logged in user.
+Throws =Error::Simple= exception on hard errors.
+
+#DbcConnect
+---++++ =connect( $dbname ) -> $dbh=
+
+Tries to connect to a database defined by =$dbname=.
+
+*Returns*: a =CPAN:DBI= database handle on success,
+=undef= otherwise.
+
+#DbcDisconnect
+---++++ =disconnect( [ $dbname, ... ] )=
+
+Disconnects from databases defined by the argument list. Disconnects all
+opened connections if the list is empty.
+
+#DbcAccessAllowed
+---++++ =access_allowed( $dbname, $topic, $access_type [, $user] ) -> $entity=
+
+Verifies user's permissions of type =$access_type= for a database defined
+by =$dbname= in a topic defined by =$topic=. If =$user= argument is omitted
+then permissions are checked for the currently logged in user.
+
+*Returns*: =undef= if =$access_type= is not permitted. Otherwise it's
+%WIKITOOLNAME%'s group or user name to which =$access_type= is granted.
 
 More about permissions read in [[#AccessControl][Access Control]].
+
+#DbcConnected
+---++++ =connected( $dbname ) -> (0|1)=
+
+Checks if there is initialized =dbh= for database defined by =$dbname=.
+
+*Returns*: =undef= if database defined by =$dbname= is missing in database
+definitions; =true= value if there is initialized =dbh= handle for
+the database; =false= otherwise.
+
+#DbcDbh
+---++++ =dbh( $dbname ) -> $dbh=
+
+*Returns*: =dbh= handle for a connected database, =undef= for a disconnected
+or non-existing one.
+
+---+++ Procedural API
+
+#DbInit
+---++++ =db_init ( )=
+
+Initializes the module. Must be called before any other subroutines or if
+content of =$%WIKITOOLNAME%::cfg{Extensions}{DatabaseContrib}{connections}= has
+been changed. The latter is mostly related to writing test units.
+
+#DbConnect
+---++++ =db_connect ( $dbname ) -> ( $dbh )=
+
+See [[#DbcConnect][=connect()=]] method.
+
+#DbConnected
+---++++ =db_connected ( $dbname ) -> ( undef|0|1 )=
+
+See [[#DbcConnected][=connected()=]] method.
+
+#DbDisconnect
+---++++ =db_disconnect ( [ $dbname, ... ] )=
+
+See [[#DbcDisconnect][=disconnect()=]] method.
+
+#DbAccessAllowed
+---++++ =db_access_allowed ( $dbname, $topic, $access_type [, $user ] )=
+
+See [[#DbcAccessAllowed][=access_allowed()=]] method.
 
 #DatabaseConfig
 ---++ Database Configuration
@@ -116,13 +182,13 @@ The following parameters can be used to specify a database. The first level key 
 |=database=|Database name on the server.|_none_|required|
 |=user=|Default database account name.|""|optional|
 |=password=|Default database account password.|""|optional|
-|=driver=|CPAN:DBI driver used to access the server, (such as =Pg=, =mysql=, =sqlite=).<sup>[[#DriverNote][1]]</sup>|_none_|required|
-|=driver_attributes=|Additional DBD driver specific attributes to be passed as fourth argument to =DBI-&gt;connect()= call. %BR% %X% Attributes =RaiseError=, =PrintError= and =FetchHashKeyName= are used intrnally by DatabaseContrib and will be ignored.|_none_|optinal|
-|=dsn=|Complete =dsn= string to be used when creating the connection. See your DBD driver documentation.%BR%%T% _With this key defined both =database= and =driver= keys are ignored._|_none_|optional|
+|=driver=| =CPAN:DBI= driver used to access the server, (such as =Pg=, =mysql=, =sqlite=).<sup>[[#DriverNote][1]]</sup>|_none_|required|
+|=driver_attributes=|Additional DBD driver specific attributes to be passed as fourth argument to =DBI-&gt;connect()= call. %BR%%X% _Attributes =RaiseError=, =PrintError= and =FetchHashKeyName= are used intrnally by DatabaseContrib and will be ignored._|_none_|optinal|
+|=dsn=|Complete =dsn= string to be used when creating the connection. See your DBD driver documentation.%BR%%X% _With this key defined both =database= and =driver= keys are ignored._|_none_|optional|
 |=init=|Initialization command to be sent to the database server just after the connection is initiated.|_none_|optional|
 |=host=|DB server hostname.|=localhost=|optional|
 |=codepage=|Client-side codepage of this connection.<sup>[[#CodePageNote][2]]</sup>|_none_|optional|
-|=usermap=|Hash ref mapping Foswiki users or groups to database accounts. See [[#AccessControl][Access control]] below.|_none_|optional|
+|=usermap=|Hash ref mapping %WIKITOOLNAME% users or groups to database accounts. See [[#AccessControl][Access control]] below.|_none_|optional|
 |=allow_*=|Additional topic-level access control support (see [[#AccessControl][Access control]] below).|_none_|optional|
 
 #DriverNote
@@ -144,7 +210,7 @@ Finding out if a user is permitted for an action might be somewhat tricky as the
 #Wiki2DBMap
 ---++++ %WIKITOOLNAME% to database user mapping.
  
-Mapping of Foswiki users into database server user accounts is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above).
+Mapping of %WIKITOOLNAME% users into database server user accounts is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above).
 The check is done using the following rules:
 
    1. Check if %WIKITOOLNAME% user has an enty in =usermap=.
@@ -156,11 +222,11 @@ The check is done using the following rules:
 #AccessChecks
 ---++++ Access checks.
 
-Access checks are performed by =db_access_allowed= subroutine. Checks are based upon special keys in a [[#DatabaseConfig][database definition]]. The keys are mapping topics into
+Access checks are performed by [[#DbcAccessAllowed][=access_allowed=]] method. Checks are based upon special keys in a [[#DatabaseConfig][database definition]]. The keys are mapping topics into
 %WIKITOOLNAME% users and groups. A key is related to a kind of action allowed for a user if topic maps into this user or into a group this user belongs to. Key names are not predefined and
 their meanings are specified by a plugin performing an access check.
 
-For example, DBIQueryPlugin relies upon =allow_do= and =allow_query= keys to determine if %<nop>DBI_DO% and %<nop>DBI_QUERY% are accessible by the user respectively.
+For example, DBIQueryPlugin relies upon =allow_do= and =allow_query= keys to determine if %<nop>DBI_DO% and %<nop>DBI_QUERY% are respectively accessible by a user.
 %T% Read DBIQueryPlugin documention to find out more about [[DBIQueryPlugin#AccessControl][access checks]].
 
 There are no special restrictions on access key names though except that they mist differ from the standard keys used by DatabaseContrib. Though it is highly recommended that name
