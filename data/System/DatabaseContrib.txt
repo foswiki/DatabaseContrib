@@ -12,10 +12,10 @@ One line description, required for extensions repository catalog.
 
 ---++ Summary of Contents
 
-This contrib provides API that come in handy when accessing a SQL database.
+This contrib provides an API that come in handy when accessing a SQL database.
 The API implemented using two different approaches: OO and procedural.
-While OO is the default procedural is been kept for compatibility matters
-only and it's use is strongly discouraged. 
+While OO is the default, procedural is been kept for compatibility
+only and its use is strongly discouraged. 
 
 This contrib is used among others, by
 %WIKITOOLNAME%:Extensions.DBIQueryPlugin. The hope is that we can
@@ -25,7 +25,7 @@ into this single contrib.
 ---++ Detailed Documentation
 
 This plugin uses the database independent access methods in =CPAN:DBI= to
-facilitate access to the SQL database. In the following =$dbh= refers to
+facilitate access to the SQL database. In the following, =$dbh= refers to
 the database handle abstraction of =CPAN:DBI=.
 
 ---+++ Conventions
@@ -92,21 +92,21 @@ then permissions are checked for the currently logged in user.
 *Returns*: =undef= if =$access_type= is not permitted. Otherwise it's
 %WIKITOOLNAME%'s group or user name to which =$access_type= is granted.
 
-More about permissions read in [[#AccessControl][Access Control]].
+Read more about permissions in [[#AccessControl][Access Control]].
 
 #DbcConnected
 ---++++ =connected( $dbname ) -> (0|1)=
 
-Checks if there is initialized =dbh= for database defined by =$dbname=.
+Checks if there is initialized =$dbh= for database defined by =$dbname=.
 
 *Returns*: =undef= if database defined by =$dbname= is missing in database
-definitions; =true= value if there is initialized =dbh= handle for
+definitions; =true= value if there is initialized =$dbh= handle for
 the database; =false= otherwise.
 
 #DbcDbh
 ---++++ =dbh( $dbname ) -> $dbh=
 
-*Returns*: =dbh= handle for a connected database, =undef= for a disconnected
+*Returns*: =$dbh= handle for a connected database, =undef= for a disconnected
 or non-existing one.
 
 ---+++ Procedural API
@@ -141,7 +141,7 @@ See [[#DbcAccessAllowed][=access_allowed()=]] method.
 #DatabaseConfig
 ---++ Database Configuration
 
-The databases that one may connect to are defined through the =configure= script. The connection information is inserted in the =DatabaseContrib= section.
+The databases that one may connect to are defined through =configure=. The connection information is inserted in the =DatabaseContrib= section.
 
 <blockquote style="background-color:#f5f5f5">
 Example:
@@ -200,84 +200,139 @@ The following parameters can be used to specify a database. The first level key 
 #AccessControl
 ---++ Access Control
 
-Finding out if a user is permitted for an action might be somewhat tricky as there're three layers of control are involved:
+Finding out if a user is permitted to perform a database action involves
+three layers of control:
+   1 Foswiki ACLs that control access to the topic
+   1 DatabaseContrib provides, _but does not enforce_, a simple [[#AccessChecks][access control mechanism]] which can be used by calling code
+   1 Database server side permissions implied through [[#Wiki2DBMap][wiki user to DB user mapping]]
 
-   1. On the top level %WIKITOOLNAME% checks user's permissions to read or modify a topic. This layer we better consider when deal with a plugin like DBIQueryPlugin. Still, we mention it here as it's a crucial part of the whole security issue.
-   1. DatabaseContrib provides (but doesn't use) the middle layer check [[#AccessChecks][mechanism]] which can be used by a plugin or any other Perl code.
-      * The only kind of permission check performed by DatabaseContrib is control if the %WIKITOOLNAME% user can be mapped into a DB user by means of the [[#DatabaseConfig][database definition]] as described [[#Wiki2DBMap][below]].
-   1. Finally, the lowest layer is database server side permissions implied thru %WIKITOOLNAME% user to DB user mappings mentionted above.
+Foswiki ACLs are discussed in depth elsewhere. We will focus on the seconds two layers of access control.
+
+#AccessChecks
+---++++ Access checks
+      
+Callers can perform access checks using the [[#DbcAccessAllowed][=access_allowed=]] method. Checks are based on:
+   1 The operation being performed e.g. =query=, =do=
+   1 The context of which the access occurs (usually a web.topic name)
+The checks are defined in the [[#DatabaseConfig][database definition]].
+
+Operations are defined by callers using a name of the form =allow_*=, for example, =allow_query=, =allow_do=. These operation names are mapped in the database configuration to an access control hash.
+
+The access control hash maps individual contexts to %WIKITOOLNAME% user and/or group names. If the current context is mapped to the user's identity, or to a group that the user belongs to, then access is granted. If the current topic name
+is not found in the map then the =default= key is used. If the context
+is not mapped and there is no =default= key, then access is denied.
+
+It is important to remember that callers define the interpretation of both
+the context and the operation. DatabaseContrib simply provides the generic
+mechanism for checking them. Note especially that there is no concept of
+wildcards in operatoin and context names; they must match exactly.
+
+There are no special restrictions on operation names other than they
+must differ from the other configuration keys used by DatabaseContrib.
+It is highly recommended that operation names have an =allow_= prefix
+to avoid any future conflicts.
+
+For example, an access control hash for the =allow_query= operation as used
+by the DBIQueryPlugin might looks as follows. DBIQueryPlugin uses the complete
+web.topic name where the database operation is being performed as the context
+for the access check.
+
+<verbatim>
+allow_do => {
+    'SomeWeb.SomeTopic' => [ qw( WikiUser SomeGroup ) ],
+    'SomeWeb.SomeOtherTopic' => [ qw( SomeOtherGroup ScumBag ) ],
+    default => [ qw( SomeMightyUser MightyGroup ) ]
+}
+</verbatim>
+
+In this case if the context is =!SomeWeb.SomeTopic= then =!WikiUser= and members of =!SomeGroup= are allowed access. Everyone else is denied.
+
+If the context is =!SomeWeb.SomeOtherTopic= then =!ScumBag= and members of ='SomeOtherGroup= are allowed access. All other are denied.
+
+If the context is not =!SomeWeb.SomeTopic= or =!SomeWeb.SomeOtherTopic= then only =!SomeMightyUser= and members of =!MightyGroup= are permitted access. All others are denied.
+
+%I% If there is no entry in the configuration for an operation then *no access controls are applied*; all users can access the operation in all contexts. Note however that [[#Wiki2DBMap][user mappings]] still apply.
+
+---++++ Inheritance
+
+Access controls are often organized hierarchically, meaning that if a user is permitted one kind of access then they are implicitly permitted a more restrictive kind of access as well.
+
+Let's add another operation to the example above:
+
+<verbatim>
+allow_query => {
+    'SomeWeb.SomeTopic' => [ qw( ScumBag ) ]
+},
+</verbatim>
+
+Without inheritance, this restricts the =allow_query= operation in context
+=!SomeWeb.SomeTopic= to user =!ScumBag= only (ignoring group membership in
+the example for the sake of clarity).
+
+| *Can they query?*       | *!SomeMightyUser* | *!WikiUser* | *!ScumBag* |
+| !SomeWeb.SomeTopic      |  *%X%*  |  *%Y%*  |  *%Y%*  |
+| !SomeWeb.SomeOtherTopic |  *%X%*  |  *%X%*  |  *%Y%*  |
+| !SomeWeb.UnlistedTopic  |  *%Y%*  |  *%X%*  |  *%X%*  |
+*Without inheritance*
+| *Can they query?*       | *!SomeMightyUser* | *!WikiUser* | *!ScumBag* |
+| !SomeWeb.SomeTopic | %X% | %X% | %Y% |
+| !SomeWeb.SomeOtherTopic | %X% | %X% | %X% |
+| !SomeWeb.UnlistedTopic | %X% | %X% | %X% |
+
+| *Can they do?*       | *!SomeMightyUser* | *!WikiUser* | *!ScumBag* |
+| !SomeWeb.SomeTopic | %X% | %Y% | %X% |
+| !SomeWeb.SomeOtherTopic | %X% | %X% | %Y% |
+| !SomeWeb.UnlistedTopic | %Y% | %X% | %X% |
+
+Now let's say that =allow_query= inherits from =allow_do=.
+
+| *Can they query?*       | *!SomeMightyUser* | *!WikiUser* | *!ScumBag* |
+| !SomeWeb.SomeTopic | %X% | %Y% | %Y% |
+| !SomeWeb.SomeOtherTopic | %X% | %X% | %Y% |
+| !SomeWeb.UnlistedTopic | %Y% | %X% | %X% |
+
+| *Can they do?*       | *!SomeMightyUser* | *!WikiUser* | *!ScumBag* |
+| !SomeWeb.SomeTopic | %X% | %Y% | %X% |
+| !SomeWeb.SomeOtherTopic | %X% | %X% | %Y% |
+| !SomeWeb.UnlistedTopic | %Y% | %X% | %X% |
+
+DatabaseContrib implements this functionality using the =add_acl_inheritance=
+method. Callers can use this to define an inheritance relation between pairs of operations. For example,
+<verbatim
+    $dbc->add_acl_inheritance( allow_query => 'allow_do' )
+</verbatim>
+specifies the inheritance relation discussed above. Inheritance relations can allso be specified during construction, thus:
+<verbatim>
+    $dbc =
+      Foswiki::Contrib::DatabaseContrib->new(
+        acl_inheritance => { allow_query => 'allow_do', }, )
+</verbatim>
 
 #Wiki2DBMap
 ---++++ %WIKITOOLNAME% to database user mapping.
- 
-Mapping of %WIKITOOLNAME% users into database server user accounts is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above).
-The check is done using the following rules:
 
-   1. Check if %WIKITOOLNAME% user has an enty in =usermap=.
-   1. Check if %WIKITOOLNAME% user is a member of a group that has an entry in =usermap=.
-   1. Use =user= and =password= keys of the [[#Config][database definition]].
+The lowest level of database access control involves mapping the user's wiki identity into a database server user account. This step is optional, and only really useful if the database supports multiple user accounts. The mapping can be
+performed for individual %WIKITOOLNAME% user accounts, or implied through membership of
+a wiki group.
 
-=db_connect= fails if no valid mapping is found.
-
-#AccessChecks
----++++ Access checks.
-
-Access checks are performed by [[#DbcAccessAllowed][=access_allowed=]] method. Checks are based upon special keys in a [[#DatabaseConfig][database definition]]. The keys are mapping topics into
-%WIKITOOLNAME% users and groups. A key is related to a kind of action allowed for a user if topic maps into this user or into a group this user belongs to. Key names are not predefined and
-their meanings are specified by a plugin performing an access check.
-
-For example, DBIQueryPlugin relies upon =allow_do= and =allow_query= keys to determine if %<nop>DBI_DO% and %<nop>DBI_QUERY% are respectively accessible by a user.
-%T% Read DBIQueryPlugin documention to find out more about [[DBIQueryPlugin#AccessControl][access checks]].
-
-There are no special restrictions on access key names though except that they mist differ from the standard keys used by DatabaseContrib. Though it is highly recommended that name
-shall be prepended with =allow_= prefix as this way it will never get into a confilict with possible future development of this contrib.
-
-An access rule is a hash of the following form:
-
+Mapping is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above). If a user has an explicit entry in the =usermap=, then that mapping is used. Otherwise group membership is tested for each group listed in the =usermap=. For example,
 <verbatim>
-allow_something => {
-    default => [ qw( SomeMightyUser MightyGroup ) ],
-    'SomeWeb.SomeTopic' => [ qw( WikiUser SomeGroup ) ],
-    'SomeWeb.SomeOtherTopic' => [ qw( SomeOtherGroup ScumBag ) ],
-},
+usermap => {
+   DonaldTrump => {
+       user => 'potus',
+       password => 'pass'
+   },
+   SenateOversightGroup => {
+       user => 'fireguard',
+       password => 'chocolate',
+   }
+}
 </verbatim>
+If user 'DonaldTrump' attempts an operation on this database, they are mapped to DB user 'potus'. If another user attempts access and they are a member of the wiki group 'SenateOversightGroup' they are mapped to DB user 'fireguard'. As many mappings as necessary can be defined.
 
-In simple words it means that !WikiUser and memebers of !SomeGroup are allowed to do =something= within topic =!SomeWeb.SomeTopic=. Topic names has to be in their full form, including web name.
-No variable or macros expansion is done for the purpose of better readability and consequently for better control over permissions.
+%X% *there is no ordering implied* other than 'check user first, then check group'. So if your user is a member of several matching groups, it is *random* which group mapping will be used to access the DB.
 
-Instead of a topic name special key =default= could be used to define permissions to topics not individually listed for a paticular =allow_= key. In the last example it means that !WikiUser is
-allowed for !SomeWeb.SomeTopic but not for !SomeWeb.SomeOtherTopic and not for any other topic of this %WIKITOOLNAME% unless he is a member of !MightGroup.
-
-%X% It is important to remember that =default= key is used only and only when no individual entry for a topic is present in an =allow_= hash. What it means is that neither !SomeMightyUser nor
-members of !MightyGroup are allowed for !SomeWeb.SomeOtherTopic unless they're members of !SomeGroup. In real life I would suggest making life simplier for !AdminGroup by including it into the =default=
-key. But it still has to be mentioned for any other topic where memers of the group require access.
-
----++++ Permissions inheritance.
-
-Quite often permissions are organized hierarchically meaning that if a user allowed for one kind of access then he is allowed for more restrictive kind of access just by definition.
-For example, DBIQueryPlugin postulates that users having =allow_do= permission doesn't need to be specifically listed in =allow_query= for the same topic.
-
-=db_access_allowed()= subroutine implements this functionality by defining permissions inheritance. Let's add one more =allow_= key to the example above:
-
-<verbatim>
-allow_somemore => {
-    'SomeWeb.SomeTopic' => [ qw( ScumBag ) ],
-},
-</verbatim>
-
-Assume that =allow_somemore= inherits from =allow_something=. Then the following table displays what users a granted with =allow_somemore= for a topic.
-
-%X% __Note:__ We suppose that !SomeMightUser is a member of !MightyGroup only; !WikiUser isn a member of !SomeGroup only. !ScumBag isn't a member of any group.
-
-|<nop>                   |  *!SomeMightUser*  |  *!WikiUser*  | *!ScumBag* |
-|*!SomeWeb.SomeTopic*     |  *%X%*  |  *%Y%*  |  *%Y%*  |
-|*!SomeWeb.SomeOtherTopic*|  *%X%*  |  *%X%*  |  *%Y%*  |
-|*!SomeWeb.UnlistedTopic* |  *%Y%*  |  *%X%*  |  *%X%*  |
-
-Technically, inheritance is implemented in a very simple way: if there is no match for a user in an =allow_= key then =db_access_allowed= is been called against the key it inherits from.
-
-%X% __Note:__ For the moment there is no way to define custom inheritance. It is hardcoded to implement DBIQueryPlugin =allow_query= %M% =allow_do= relations. Though it's only a matter
-to find out which implementations is better.
+If the user is not mapped by the =usermap=, or no =usermap= is given, then the default database user will be used.
 
 ---++ Settings
 

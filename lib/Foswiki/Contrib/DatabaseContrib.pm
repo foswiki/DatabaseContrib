@@ -34,7 +34,7 @@ use Data::Dumper;
 #   v1.2.1_001 -> v1.2.2 -> v1.2.2_001 -> v1.2.3
 #   1.21_001 -> 1.22 -> 1.22_001 -> 1.23
 #
-use version; our $VERSION = version->declare('1.02');
+use version; our $VERSION = version->declare('1.03');
 
 # $RELEASE is used in the "Find More Extensions" automation in configure.
 # It is a manually maintained string used to identify functionality steps.
@@ -49,7 +49,7 @@ use version; our $VERSION = version->declare('1.02');
 # It is preferred to keep this compatible with $VERSION. At some future
 # date, Foswiki will deprecate RELEASE and use the VERSION string.
 #
-our $RELEASE = '1.02';
+our $RELEASE = '24 March 2017';
 
 # One-line description of the module
 our $SHORTDESCRIPTION =
@@ -292,13 +292,13 @@ sub add_acl_inheritance {
 }
 
 # $conname - connection name from the configutation
-# $topic – page we're checking access for in form Web.Topic
+# $context – context we're checking access, typically a topic name in the form Web.Topic
 # $access_type - one of the allow_* keys.
 # $user - user we're checking access for. Currently logged in one if undefined.
 # $checked_atoms – hash of already checked out allow_* keys. Used to avoid circular dependencies.
 sub access_allowed {
     my $self = shift;
-    my ( $conname, $topic, $access_type, $user, $checked_atoms ) = @_;
+    my ( $conname, $context, $access_type, $user, $checked_atoms ) = @_;
 
     $checked_atoms //= { _order => [], _nesting => 0 };
     my $nesting = $checked_atoms->{_nesting};
@@ -338,11 +338,11 @@ sub access_allowed {
 
     if ( defined $connection->{$access_type} ) {
 
-        #say STDERR "  " x $nesting, "Checking $user of $conname at $topic";
+        #say STDERR "  " x $nesting, "Checking $user of $conname at $context";
 
         my $final_topic =
-          defined( $connection->{$access_type}{$topic} )
-          ? $topic
+          defined( $connection->{$access_type}{$context} )
+          ? $context
           : "default";
 
 #say STDERR "  " x $nesting, "Final topic would be $final_topic: $connection->{$access_type}";
@@ -360,7 +360,7 @@ sub access_allowed {
           : [];
         $match = $self->_find_mapping( $allow_map, $user );
 
-#say STDERR "  " x $nesting, "Match result for $user on $topic for $conname: ", $match // '*undef*';
+#say STDERR "  " x $nesting, "Match result for $user in $context for $conname: ", $match // '*undef*';
     }
     if ( !defined($match) && defined( $acl_inheritance->{$access_type} ) ) {
         ( local $checked_atoms->{_nesting} )++;
@@ -370,15 +370,22 @@ sub access_allowed {
 
 #say STDERR "  " x $nesting, "No match found, checking for higher level access map $parent_acl";
             $match =
-              $self->access_allowed( $conname, $topic, $parent_acl, $user,
+              $self->access_allowed( $conname, $context, $parent_acl, $user,
                 clone($checked_atoms) );
 
 #say STDERR "  " x $nesting, "Got '" . ($match // '*undef*') . "' for $parent_acl";
             last if defined $match;
         }
     }
+    elsif (!defined $connection->{$access_type}
+        && !defined $acl_inheritance->{$access_type} )
+    {
+        # Item14348: if no access constraints are defined, default is
+        # no access constraints
+        $match = 1;
+    }
 
-#say STDERR "  " x $nesting, "Returning $access_type result for $user on $topic for $conname: '", $match // '*undef*', "'";
+#say STDERR "  " x $nesting, "Returning $access_type result for $user in $context for $conname: '", $match // '*undef*', "'";
     return $match;
 }
 
@@ -414,10 +421,15 @@ sub connect {
 
     if ( defined( $connection->{usermap} ) ) {
 
-       # Individual mappings are checked first when it's about user->dbuser map.
+        # Individual mappings are checked first.
         my @maps =
           sort { ( $a =~ /Group$/ ) <=> ( $b =~ /Group$/ ) }
           keys %{ $connection->{usermap} };
+
+        # SMELL: *there is no ordering implied* other than 'check users
+        # first, then check groups'. So if your user is a member of
+        # several matching groups, it is *random* which group mapping
+        # will be used to access the DB.
 
         my $usermap_key = $self->_find_mapping( \@maps );
         if ($usermap_key) {
