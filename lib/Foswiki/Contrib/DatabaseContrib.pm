@@ -34,7 +34,7 @@ use Data::Dumper;
 #   v1.2.1_001 -> v1.2.2 -> v1.2.2_001 -> v1.2.3
 #   1.21_001 -> 1.22 -> 1.22_001 -> 1.23
 #
-use version; our $VERSION = version->declare('1.03');
+use version; our $VERSION = version->declare('1.03_001');
 
 # $RELEASE is used in the "Find More Extensions" automation in configure.
 # It is a manually maintained string used to identify functionality steps.
@@ -111,6 +111,15 @@ sub _fail {
     }
 }
 
+# Converts a glob string into a valid Perl regexp. The only wildcard
+# supported is asterisk; all backslash-prefixed chars are mapped into a the char
+# itself (i.e. \* -> *, \\ -> \); all non-globs are then quoted for regexp.
+sub _glob2rx {
+    my $glob = shift;
+    return join ".*", map { s/\\(.)/$1/g; quotemeta($_) } split /(?<!\\)\*/,
+      $glob;
+}
+
 sub _check_init {
     throw Error::Simple -text =>
 "DatabaseContrib has not been initalized yet. Call db_init() before use please."
@@ -146,7 +155,7 @@ sub _find_mapping {
 #say STDERR "_find_mapping(", join(",", map {$_ // '*undef*'} @_), ")";
 #say STDERR "Mappings list: [", join(",", map {$_ // '*undef*'} @$mappings), "]";
 
-    $user = Foswiki::Func::getWikiUserName( $user ? $user : () );
+    $user = Foswiki::Func::getWikiName( $user ? $user : () );
     my $found = 0;
     my $match;
     foreach my $entity (@$mappings) {
@@ -155,7 +164,39 @@ sub _find_mapping {
         #say STDERR "Matching $user against $entity";
 
         # Checking for access of $user within $entity
-        if ( Foswiki::Func::isGroup($entity) ) {
+        if ( $entity =~ /\*/ ) {
+
+            my $entityRx = _glob2rx($entity);
+            
+            # Pattern-match entity.
+            $found = $user =~ /^$entityRx$/;
+
+            if ( !$found && $entity =~ /Group$/ ) {
+
+                # The glob must be matched against user groups.
+
+                my $userGroups = $self->_cache('user_groups') // {};
+
+                unless ( defined $userGroups->{$user} ) {
+                    my $iterator = Foswiki::Func::eachMembership($user);
+                    my @groups;
+
+                    while ( $iterator->hasNext ) {
+                        push @groups, $iterator->next;
+                    }
+
+                    $userGroups->{$user} = \@groups;
+                    $self->_cache( 'user_groups', $userGroups );
+                }
+
+              GROUP_MATCH:
+                foreach my $group ( @{ $userGroups->{$user} } ) {
+                    $found = $group =~ /^$entityRx$/;
+                    last GROUP_MATCH if $found;
+                }
+            }
+        }
+        elsif ( Foswiki::Func::isGroup($entity) ) {
 
             # $entity is a group
             #say STDERR "$entity is a group";
@@ -163,7 +204,7 @@ sub _find_mapping {
               Foswiki::Func::isGroupMember( $entity, $user, { expand => 1 } );
         }
         else {
-            $entity = Foswiki::Func::getWikiUserName($entity);
+            $entity = Foswiki::Func::getWikiName($entity);
 
             #say STDERR "$entity is a user";
             $found = ( $user eq $entity );
@@ -340,21 +381,31 @@ sub access_allowed {
 
         #say STDERR "  " x $nesting, "Checking $user of $conname at $context";
 
-        my $final_topic =
-          defined( $connection->{$access_type}{$context} )
-          ? $context
-          : "default";
+        my $final_context = 'default';
 
-#say STDERR "  " x $nesting, "Final topic would be $final_topic: $connection->{$access_type}";
+      CONTEXT:
+        foreach my $ctxKey ( keys %{ $connection->{$access_type} } ) {
+
+            # Map a construct like SomeWeb.Some*Topic into a regexp.
+            # Supports escaping with '\': 'SomeWeb.Some*Top\ic\*' – 'i' is
+            # escaped too.
+            my $ctxRx = _glob2rx($ctxKey);
+            if ( $context =~ /^$ctxRx$/ ) {
+                $final_context = $ctxKey;
+                last CONTEXT;
+            }
+        }
+
+#say STDERR "  " x $nesting, "Final topic would be $final_context: $connection->{$access_type}";
         my $allow_map =
-          defined( $connection->{$access_type}{$final_topic} )
+          defined( $connection->{$access_type}{$final_context} )
           ? (
-            ref( $connection->{$access_type}{$final_topic} ) eq 'ARRAY'
-            ? $connection->{$access_type}{$final_topic}
+            ref( $connection->{$access_type}{$final_context} ) eq 'ARRAY'
+            ? $connection->{$access_type}{$final_context}
             : [
-                ref( $connection->{$access_type}{$final_topic} )
+                ref( $connection->{$access_type}{$final_context} )
                 ? ()
-                : $connection->{$access_type}{$final_topic}
+                : $connection->{$access_type}{$final_context}
             ]
           )
           : [];

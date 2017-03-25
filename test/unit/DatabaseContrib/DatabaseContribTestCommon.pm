@@ -62,6 +62,113 @@ sub set_up {
         'Failed to create a new admin' );
 
     $this->assert( db_init, "DatabaseContrib init failed" );
+    
+    $this->{check_pairs} = {
+        valid => {
+            allow_do => [
+                [
+                    qw(ScumBag AnyWeb.AnyTopic),
+                    "Admins are allowed anywhere by default"
+                ],
+                [
+                    qw(scum AnyWeb.AnyTopic),
+                    "Admin by his short login is allowed anywhere by default"
+                ],
+                [
+                    qw(JohnSmith Sandbox.DoForSelected),
+                    "Individual user allowed for a topic"
+                ],
+                [
+                    qw(DummyGuest Sandbox.DoDummyTopic),
+                    "A user belongs to an allowed group"
+                ],
+            ],
+            allow_query => [
+                [
+                    qw(MightyAdmin AnyWeb.AnyTopic),
+"Admins are like gods: allowed anywhere by default in allow_do"
+                ],
+                [
+                    qw(JohnSmith Sandbox.QTestTopic),
+                    "Inidividual user allowed for a topic"
+                ],
+                [
+                    'DummyGuest',
+                    "$this->{test_web}.QSomeImaginableTopic",
+                    "Individual user defined together with a group for a topic"
+                ],
+                [
+                    'JohnSmith',
+                    "$this->{test_web}.QSomeImaginableTopic",
+"User within a group defined together with a individual user for a topic"
+                ],
+                [
+                    qw(JohnSmith Sandbox.DoForSelected),
+                    "Individual user defined in allow_do"
+                ],
+                [
+                    qw(DummyGuest Sandbox.DoDummyTopic),
+                    "User within a group defined in allow_do"
+                ],
+                [
+                    qw(ElvisPresley AnotherWeb.AnotherTopic),
+"The king yet not the god: cannot be do-ing but still may query anywhere"
+                ],
+                [
+                    qw(DummyGuest Sandbox.GlobMatchingTopic),
+                    "Glob-matching for user's group"
+                ],
+                [
+                    qw(ElvisPresley Sandbox.GlobsTopic),
+                    "Glob-matching for user"
+                ],
+                [
+                    qw(ElvisPresley Sandbox.GlobsTopicRestrict),
+                    "Glob-matching for user's group"
+                ],
+                [
+                    qw(DummyGuest Sandbox.GlobsTopic),
+                    "Glob-matching for user's group"
+                ],
+            ],
+        },
+        invalid => {
+            allow_do => [
+                [
+                    qw(DummyGuest AnyWeb.AnyTopic),
+                    "A user anywhere outside his allowed zone is unallowed"
+                ],
+                [
+                    qw(JohnSmith Sandbox.QTestTopic),
+                    "Allowed for query, not for do-ing"
+                ],
+                [
+                    qw(DummyGuest Sandbox.GlobMatchingTopic),
+                    "Glob-match: user allowed for query, not for do-ing"
+                ],
+            ],
+            allow_query => [
+                [
+                    'DummyGuest',
+                    "$Foswiki::cfg{UsersWebName}.QSiteMessageBoard",
+                    "Variable expansion for topic name is not supported"
+                ],
+                [
+                    'JohnSmith',
+                    "Sandbox.QDummyTopic",
+                    "Individual user not allowed for a topic"
+                ],
+                [
+                    qw(DummyGuest Sandbox.GlobMatchingTopicAha),
+                    "Glob-match: user allowed for query, not for do-ing"
+                ],
+                [
+                    qw(DummyGuest Sandbox.GlobsTopicRestrict),
+                    "Glob-matching doesn't apply for this user or its groups"
+                ],
+            ],
+        },
+    };
 }
 
 sub tear_down {
@@ -101,6 +208,9 @@ sub loadExtraConfig {
                 'Sandbox.QTestTopic'           => [qw(JohnSmith)],
                 "$this->{test_web}.QSomeImaginableTopic" =>
                   [qw(TestGroup DummyGuest)],
+                "Sandbox.GlobM*Topic"    => [qw(DummyGroup)],
+                "Sandbox.GlobsTopic" => [qw(D*Group El*y)],
+                "Sandbox.GlobsTopicRestrict" => [qw(Any*Q*Group)],
             },
             usermap => {
                 DummyGroup => {
