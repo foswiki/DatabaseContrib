@@ -167,9 +167,11 @@ sub _find_mapping {
         if ( $entity =~ /\*/ ) {
 
             my $entityRx = _glob2rx($entity);
-            
+
             # Pattern-match entity.
-            $found = $user =~ /^$entityRx$/;
+            if ( $found = $user =~ /^$entityRx$/ ) {
+                $match = $user;
+            }
 
             if ( !$found && $entity =~ /Group$/ ) {
 
@@ -192,7 +194,10 @@ sub _find_mapping {
               GROUP_MATCH:
                 foreach my $group ( @{ $userGroups->{$user} } ) {
                     $found = $group =~ /^$entityRx$/;
-                    last GROUP_MATCH if $found;
+                    if ($found) {
+                        $match = $group;
+                        last GROUP_MATCH;
+                    }
                 }
             }
         }
