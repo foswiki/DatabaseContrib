@@ -319,7 +319,7 @@ sub _set_codepage {
 sub add_acl_inheritance {
     my $self = shift;
 
-    $self->fail( "Odd number of elements in call to "
+    $self->_fail( "Odd number of elements in call to "
           . ref($self)
           . "::add_acl_inheritance()" )
       unless scalar(@_) % 2 == 0;
@@ -465,7 +465,7 @@ sub connect {
         foreach my $field (@required_fields) {
             unless ( defined $connection->{$field} ) {
                 return undef
-                  if $self->fail(
+                  if $self->_fail(
 "Required field $field is not defined for database connection $conname.\n"
                   );
             }
@@ -477,15 +477,36 @@ sub connect {
 
     if ( defined( $connection->{usermap} ) ) {
 
-        # Individual mappings are checked first.
-        my @maps =
-          sort { ( $a =~ /Group$/ ) <=> ( $b =~ /Group$/ ) }
-          keys %{ $connection->{usermap} };
+        my @maps;
+        if ( ref( $connection->{usermap} ) eq 'HASH' ) {
 
-        # SMELL: *there is no ordering implied* other than 'check users
-        # first, then check groups'. So if your user is a member of
-        # several matching groups, it is *random* which group mapping
-        # will be used to access the DB.
+            # SMELL: *there is no ordering implied* other than 'check users
+            # first, then check groups'. So if your user is a member of
+            # several matching groups, it is *random* which group mapping
+            # will be used to access the DB.
+
+            # Individual mappings are checked first.
+            @maps =
+              sort { ( $a =~ /Group$/ ) <=> ( $b =~ /Group$/ ) }
+              keys %{ $connection->{usermap} };
+        }
+        elsif ( ref( $connection->{usermap} ) eq 'ARRAY' ) {
+            my ( @u, @g );    # User and group mappings
+            foreach my $ent ( @{ $connection->{usermap} } ) {
+                if ( $ent =~ /Group$/ ) {
+                    push @g, $ent;
+                }
+                else {
+                    push @u, $ent;
+                }
+            }
+            @maps = ( @u, @g );
+        }
+        else {
+            return undef
+              if $self->_fail(
+                "Connection '$conname' usermap is neither hash nor arrayref");
+        }
 
         my $usermap_key = $self->_find_mapping( \@maps );
         if ($usermap_key) {

@@ -62,7 +62,7 @@ sub set_up {
         'Failed to create a new admin' );
 
     $this->assert( db_init, "DatabaseContrib init failed" );
-    
+
     $this->{check_pairs} = {
         valid => {
             allow_do => [
@@ -208,8 +208,8 @@ sub loadExtraConfig {
                 'Sandbox.QTestTopic'           => [qw(JohnSmith)],
                 "$this->{test_web}.QSomeImaginableTopic" =>
                   [qw(TestGroup DummyGuest)],
-                "Sandbox.GlobM*Topic"    => [qw(DummyGroup)],
-                "Sandbox.GlobsTopic" => [qw(D*Group El*y)],
+                "Sandbox.GlobM*Topic"        => [qw(DummyGroup)],
+                "Sandbox.GlobsTopic"         => [qw(D*Group El*y)],
                 "Sandbox.GlobsTopicRestrict" => [qw(Any*Q*Group)],
             },
             usermap => {
