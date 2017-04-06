@@ -219,6 +219,20 @@ sub _find_mapping {
     return $found ? $match : undef;
 }
 
+sub _getConnection {
+    my $self    = shift;
+    my $conname = shift;
+
+    my $connection = $self->_cache('connections')->{$conname};
+    unless ( defined $connection ) {
+        return undef
+          if $self->_fail(
+            "No connection `$conname' defined in the cofiguration");
+    }
+
+    return $connection;
+}
+
 sub new {
     my $self = bless {}, shift;
 
@@ -301,7 +315,7 @@ sub dbh {
 sub _set_codepage {
     my $self       = shift;
     my ($conname)  = @_;
-    my $connection = $self->_cache('connections')->{$conname};
+    my $connection = $self->_getConnection($conname);
     my $dbh        = $self->dbh($conname);
 
     if ( $connection->{codepage} ) {
@@ -358,16 +372,7 @@ sub access_allowed {
     $checked_atoms->{$access_type} = 1;
     push @{ $checked_atoms->{_order} }, $access_type;
 
-    my $connection = $self->_cache('connections')->{$conname};
-
-#say STDERR "  " x $nesting, "access_allowed(", join(",", map {$_ // '*undef*'} @_), ")";
-
-    unless ( defined $connection ) {
-
-        #say STDERR "  " x $nesting, "No $conname in connections";
-        return undef
-          if $self->_fail("No connection $conname in the configuration");
-    }
+    my $connection = $self->_getConnection($conname);
 
     my $acl_inheritance = $self->_cache('acl_inheritance') // {};
 
@@ -445,32 +450,13 @@ sub access_allowed {
     return $match;
 }
 
-sub connect {
-    my $self    = shift;
-    my $conname = shift;
+sub map2dbuser {
+    my $self = shift;
+    my ( $conname, $user ) = @_;
 
-    my $connection = $self->_cache('connections')->{$conname};
-    unless ( defined $connection ) {
-        return
-          if _failure "No connection `$conname' defined in the cofiguration";
-    }
+    my $connection = $self->_getConnection($conname);
 
-    my $dbh = $self->dbh($conname);
-
-    return $dbh if defined $dbh;
-
-    my @required_fields = qw(database driver);
-
-    unless ( defined $connection->{dsn} ) {
-        foreach my $field (@required_fields) {
-            unless ( defined $connection->{$field} ) {
-                return undef
-                  if $self->_fail(
-"Required field $field is not defined for database connection $conname.\n"
-                  );
-            }
-        }
-    }
+    return () unless defined $connection;
 
     my ( $dbuser, $dbpass ) =
       ( $connection->{user} // "", $connection->{password} // "" );
@@ -489,18 +475,17 @@ sub connect {
             @maps =
               sort { ( $a =~ /Group$/ ) <=> ( $b =~ /Group$/ ) }
               keys %{ $connection->{usermap} };
+            $connection->{_maphash} = $connection->{usermap};
         }
         elsif ( ref( $connection->{usermap} ) eq 'ARRAY' ) {
-            my ( @u, @g );    # User and group mappings
-            foreach my $ent ( @{ $connection->{usermap} } ) {
-                if ( $ent =~ /Group$/ ) {
-                    push @g, $ent;
-                }
-                else {
-                    push @u, $ent;
-                }
+            my @m = @{ $connection->{usermap} };
+            delete $connection->{_maphash};
+            foreach my $i ( 0 .. ( scalar(@m) / 2 - 1 ) ) {
+                my $ent = $m[ $i * 2 ];
+                push @maps, $ent;
+                $connection->{_maphash}{$ent} = $m[ $i * 2 + 1 ]
+                  unless defined $connection->{_maphash}{$ent};
             }
-            @maps = ( @u, @g );
         }
         else {
             return undef
@@ -508,12 +493,40 @@ sub connect {
                 "Connection '$conname' usermap is neither hash nor arrayref");
         }
 
-        my $usermap_key = $self->_find_mapping( \@maps );
+        my $usermap_key = $self->_find_mapping( \@maps, $user );
         if ($usermap_key) {
-            $dbuser = $connection->{usermap}{$usermap_key}{user};
-            $dbpass = $connection->{usermap}{$usermap_key}{password};
+            $dbuser = $connection->{_maphash}{$usermap_key}{user};
+            $dbpass = $connection->{_maphash}{$usermap_key}{password};
         }
     }
+
+    return ( $dbuser, $dbpass );
+}
+
+sub connect {
+    my $self    = shift;
+    my $conname = shift;
+
+    my $connection = $self->_getConnection($conname);
+
+    my $dbh = $self->dbh($conname);
+
+    return $dbh if defined $dbh;
+
+    my @required_fields = qw(database driver);
+
+    unless ( defined $connection->{dsn} ) {
+        foreach my $field (@required_fields) {
+            unless ( defined $connection->{$field} ) {
+                return undef
+                  if $self->_fail(
+"Required field $field is not defined for database connection $conname.\n"
+                  );
+            }
+        }
+    }
+
+    my ( $dbuser, $dbpass ) = $self->map2dbuser($conname);
 
 # CONNECTING TO $conname, ", (defined $connection->{dbh} ? $connection->{dbh} : "*undef*"), ", ", (defined $dbi_connections{$conname}{dbh} ? $dbi_connections{$conname}{dbh} : "*undef*"), "\n";
 

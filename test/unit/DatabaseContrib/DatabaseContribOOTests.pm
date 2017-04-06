@@ -136,7 +136,9 @@ sub test_permissions {
 
     foreach my $bunch (qw(valid invalid)) {
         foreach my $access_type ( keys %{ $this->{check_pairs}{$bunch} } ) {
-            foreach my $test_pair ( @{ $this->{check_pairs}{$bunch}{$access_type} } ) {
+            foreach
+              my $test_pair ( @{ $this->{check_pairs}{$bunch}{$access_type} } )
+            {
                 if ( $bunch eq 'valid' ) {
                     $this->assert(
                         $dbc->access_allowed(
@@ -177,6 +179,76 @@ sub test_permissions {
 "User shall not be allowed for query when `allow_query' inherits from existing `allow_do' but is not defined for a connection",
     );
 
+}
+
+sub test_usermap {
+    my $this = shift;
+
+    my $query = Unit::Request->new("");
+    $this->createNewFoswikiSession( $Foswiki::cfg{AdminUserLogin}, $query );
+
+    $Foswiki::cfg{Extensions}{DatabaseContrib}{connections}{sample_connection}
+      {usermap} = [
+        AdminGroup => {
+            user     => "dbadmin",
+            password => "admin_pass",
+        },
+        MightyAdmin => {
+            user     => "madmin",
+            password => "ma_pass",
+        },
+        DummyGroup => {
+            user     => "dummy",
+            password => "nopassword",
+        },
+        JohnSmith => {
+            user     => "jsmith",
+            password => "js_pass",
+        },
+      ];
+
+    my $dbc;
+    $this->assert_not_null(
+        $dbc = Foswiki::Contrib::DatabaseContrib->new,
+        "Failed to create a new DatabaseContrib object",
+    );
+
+    my ( $dbuser, $dbpass );
+
+    ( $dbuser, $dbpass ) =
+      $dbc->map2dbuser( "sample_connection", 'MightyAdmin' );
+
+    # Must not be madmin/ma_pass because AdminGroup is defined first.
+    $this->assert_equals( 'dbadmin',    $dbuser );
+    $this->assert_equals( 'admin_pass', $dbpass );
+
+    ( $dbuser, $dbpass ) = $dbc->map2dbuser( "sample_connection", 'JohnSmith' );
+
+    $this->assert_equals( 'jsmith',  $dbuser );
+    $this->assert_equals( 'js_pass', $dbpass );
+
+    Foswiki::Func::addUserToGroup( 'JohnSmith', 'DummyGroup', 0 );
+
+    # Now group shall override user's mapping because the group comes first in
+    # the list.
+    ( $dbuser, $dbpass ) = $dbc->map2dbuser( "sample_connection", 'JohnSmith' );
+
+    $this->assert_equals( 'dummy',      $dbuser );
+    $this->assert_equals( 'nopassword', $dbpass );
+
+    $this->assert(
+        Foswiki::Func::removeUserFromGroup( 'JohnSmith', 'DummyGroup' ),
+        "Failed to remove user JohnSmith from DummyGroup"
+    );
+
+    # And it must map to the user again because he is not a group member
+    # anymore.
+    ( $dbuser, $dbpass ) = $dbc->map2dbuser( "sample_connection", 'JohnSmith' );
+
+    $this->assert_equals( 'jsmith',  $dbuser );
+    $this->assert_equals( 'js_pass', $dbpass );
+
+    say STDERR "$dbuser, $dbpass";
 }
 
 1;
