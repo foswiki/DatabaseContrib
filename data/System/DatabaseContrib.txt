@@ -141,7 +141,8 @@ See [[#DbcAccessAllowed][=access_allowed()=]] method.
 #DatabaseConfig
 ---++ Database Configuration
 
-The databases that one may connect to are defined through =configure=. The connection information is inserted in the =DatabaseContrib= section.
+The databases that one may connect to are defined through =configure=. The
+connection information is inserted in the =DatabaseContrib= section.
 
 <blockquote style="background-color:#f5f5f5">
 Example:
@@ -188,7 +189,7 @@ The following parameters can be used to specify a database. The first level key 
 |=init=|Initialization command to be sent to the database server just after the connection is initiated.|_none_|optional|
 |=host=|DB server hostname.|=localhost=|optional|
 |=codepage=|Client-side codepage of this connection.<sup>[[#CodePageNote][2]]</sup>|_none_|optional|
-|=usermap=|Hash ref mapping %WIKITOOLNAME% users or groups to database accounts. See [[#AccessControl][Access control]] below.|_none_|optional|
+|=usermap=|Hash or array ref mapping %WIKITOOLNAME% users or groups to database accounts. See [[#AccessControl][Access control]] below.|_none_|optional|
 |=allow_*=|Additional topic-level access control support (see [[#AccessControl][Access control]] below).|_none_|optional|
 
 #DriverNote
@@ -216,16 +217,33 @@ Callers can perform access checks using the [[#DbcAccessAllowed][=access_allowed
    1 The context of which the access occurs (usually a web.topic name)
 The checks are defined in the [[#DatabaseConfig][database definition]].
 
-Operations are defined by callers using a name of the form =allow_*=, for example, =allow_query=, =allow_do=. These operation names are mapped in the database configuration to an access control hash.
+Operations are defined by callers using a name of the form =allow_*=, for
+example, =allow_query=, =allow_do=. These operation names are mapped in the
+database configuration to an access control hash.
 
-The access control hash maps individual contexts to %WIKITOOLNAME% user and/or group names. If the current context is mapped to the user's identity, or to a group that the user belongs to, then access is granted. If the current topic name
-is not found in the map then the =default= key is used. If the context
-is not mapped and there is no =default= key, then access is denied.
+The access control hash maps individual contexts to %WIKITOOLNAME% user and/or
+group names. If the current context is mapped to the user's identity, or to a
+group that the user belongs to, then access is granted. If the current topic
+name is not found in the map then the =default= key is used. If the context is
+not mapped and there is no =default= key, then access is denied.
+
+*%X%* Context and user/group mapping allows for use of '*' as a wildcard. There
+is no limits as to how many wildcards are allowed or where they could be placed.
+
+   $ Any*Context: !AnyGivenContext, !AnyOtherContext
+   $ *aGroup: !SantaGroup, !KindaGroup
+   $ S*U*r: !StrangeUser, !SuperUberDriver
+
+If necessary, the wildcard itself can be escaped with '\' (backslash). Actually,
+'\' escapes _any_ following character and expands into the char. It means that:
+
+   * \* => *
+   * \\ => \
+   * \a => a
 
 It is important to remember that callers define the interpretation of both
 the context and the operation. DatabaseContrib simply provides the generic
-mechanism for checking them. Note especially that there is no concept of
-wildcards in operatoin and context names; they must match exactly.
+mechanism for checking them. 
 
 There are no special restrictions on operation names other than they
 must differ from the other configuration keys used by DatabaseContrib.
@@ -241,21 +259,36 @@ for the access check.
 allow_do => {
     'SomeWeb.SomeTopic' => [ qw( WikiUser SomeGroup ) ],
     'SomeWeb.SomeOtherTopic' => [ qw( SomeOtherGroup ScumBag ) ],
+    'ATasksWeb.Task*' => [ qw( MightyGroup Mighty* Admin*Group ) ],
     default => [ qw( SomeMightyUser MightyGroup ) ]
 }
 </verbatim>
 
-In this case if the context is =!SomeWeb.SomeTopic= then =!WikiUser= and members of =!SomeGroup= are allowed access. Everyone else is denied.
+In this case if the context is =!SomeWeb.SomeTopic= then =!WikiUser= and members
+of =!SomeGroup= are granted access. Everyone else is denied.
 
-If the context is =!SomeWeb.SomeOtherTopic= then =!ScumBag= and members of ='SomeOtherGroup= are allowed access. All other are denied.
+If the context is =!SomeWeb.SomeOtherTopic= then =!ScumBag= and members of
+='SomeOtherGroup= are granted access. All other are denied.
 
-If the context is not =!SomeWeb.SomeTopic= or =!SomeWeb.SomeOtherTopic= then only =!SomeMightyUser= and members of =!MightyGroup= are permitted access. All others are denied.
+If the context is =!ATasksWeb.Task00001= or any other topic in !ATasksWeb which
+name starts with Task prefix then members of MightyGroup are granted access; any
+user whose name starts with Mighty, or belongs to groups either prefixed with
+Mighty or starting with Admin and ending with Group.
 
-%I% If there is no entry in the configuration for an operation then *no access controls are applied*; all users can access the operation in all contexts. Note however that [[#Wiki2DBMap][user mappings]] still apply.
+If the context is not =!SomeWeb.SomeTopic= or =!SomeWeb.SomeOtherTopic= then
+only =!SomeMightyUser= and members of =!MightyGroup= are permitted access. All
+others are denied. Removal of the 'default' key would result in denying access
+to all.
+
+%I% If there is no entry in the configuration for an operation then *no access
+controls are applied*; all users are granted access to an operation in all
+contexts.  Note however that [[#Wiki2DBMap][user mappings]] still apply.
 
 ---++++ Inheritance
 
-Access controls are often organized hierarchically, meaning that if a user is permitted one kind of access then they are implicitly permitted a more restrictive kind of access as well.
+Access controls are often organized hierarchically, meaning that if a user is
+permitted one kind of access then he is implicitly permitted a more
+restrictive kind of access as well.
 
 Let's add another operation to the example above:
 
@@ -311,11 +344,17 @@ specifies the inheritance relation discussed above. Inheritance relations can al
 #Wiki2DBMap
 ---++++ %WIKITOOLNAME% to database user mapping.
 
-The lowest level of database access control involves mapping the user's wiki identity into a database server user account. This step is optional, and only really useful if the database supports multiple user accounts. The mapping can be
-performed for individual %WIKITOOLNAME% user accounts, or implied through membership of
-a wiki group.
+The lowest level of database access control involves mapping the user's wiki
+identity into a database server user account. This step is optional, and only
+really useful if the database supports multiple user accounts. The mapping can
+be performed for individual %WIKITOOLNAME% user accounts, or implied through
+membership of a wiki group.
 
-Mapping is done by means of the =usermap= key in the configuration setting (see [[#DatabaseConfig][Database definition]] above). If a user has an explicit entry in the =usermap=, then that mapping is used. Otherwise group membership is tested for each group listed in the =usermap=. For example,
+Mapping is done by means of the =usermap= key in the configuration setting (see
+    [[#DatabaseConfig][Database definition]] above). If a user has an explicit
+entry in the =usermap=, then that mapping is used. Otherwise group membership is
+tested for each group listed in the =usermap=. For example,
+
 <verbatim>
 usermap => {
    DonaldTrump => {
@@ -328,11 +367,46 @@ usermap => {
    }
 }
 </verbatim>
-If user 'DonaldTrump' attempts an operation on this database, they are mapped to DB user 'potus'. If another user attempts access and they are a member of the wiki group 'SenateOversightGroup' they are mapped to DB user 'fireguard'. As many mappings as necessary can be defined.
 
-%X% *there is no ordering implied* other than 'check user first, then check group'. So if your user is a member of several matching groups, it is *random* which group mapping will be used to access the DB.
+If user 'DonaldTrump' attempts an operation on this database, they are mapped to
+DB user 'potus'. If another user attempts access and they are a member of the
+wiki group 'SenateOversightGroup' they are mapped to DB user 'fireguard'. As
+many mappings as necessary can be defined.
 
-If the user is not mapped by the =usermap=, or no =usermap= is given, then the default database user will be used.
+If the user is not mapped by the =usermap=, or no =usermap= is given, then the
+default database user will be used.
+
+*There is no ordering implied* other than 'check user first, then check
+group'. So if your user is a member of several matching groups, it is *random*
+which group mapping will be used to access the DB. To overcome this situation
+the =usermap= key could be defined as an array:
+
+<verbatim>
+usermap => [
+   FrankGroup => {
+       user => 'guest',
+       password => 'doesntmatter',
+   },
+   DonaldTrump => {
+       user => 'potus',
+       password => 'pass'
+   },
+   SenateOversightGroup => {
+       user => 'fireguard',
+       password => 'chocolate',
+   }
+]
+</verbatim>
+
+In this case there is no 'user first' ordering implied. Instead, the entries are
+checked as they're defined in the list. So, if 'DonaldTrump' happens to be a
+member of 'FrankGroup' then he is mapped into the 'guest' DB user. If he is not
+then DB user 'potus' would serve the purpose.
+
+Basically, the array form of the key is preferred over the hash variant as it is
+more specific about the credentials used for a WikiUser. Though one might
+correctly assume that the hash version would be somewhat faster over the array
+but the difference could only be seen on really huge lists.
 
 ---++ Settings
 
