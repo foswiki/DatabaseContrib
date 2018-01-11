@@ -133,12 +133,25 @@ sub test_attributes {
 sub test_version {
     my $this = shift;
 
-    my $required_ver = version->parse("v1.03_001");
+    my $required_ver = version->parse("v1.04.01");
 
     $this->assert(
         $Foswiki::Contrib::DatabaseContrib::VERSION == $required_ver,
 "Module version mismatch, expect $required_ver, got $Foswiki::Contrib::DatabaseContrib::VERSION "
     );
+}
+
+sub test_glob {
+    my $this = shift;
+
+    my $rx = Foswiki::Contrib::DatabaseContrib::_glob2rx('Sandbox.*');
+    $this->assert_equals('Sandbox\..*', $rx);
+
+    my $rx = Foswiki::Contrib::DatabaseContrib::_glob2rx('*Sandbox.*');
+    $this->assert_equals('.*Sandbox\..*', $rx);
+
+    my $rx = Foswiki::Contrib::DatabaseContrib::_glob2rx('Sandbox.*Group');
+    $this->assert_equals('Sandbox\..*Group', $rx);
 }
 
 1;

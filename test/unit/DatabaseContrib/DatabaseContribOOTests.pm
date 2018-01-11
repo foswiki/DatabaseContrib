@@ -104,17 +104,6 @@ sub test_attributes {
     $dbc->disconnect;
 }
 
-sub test_version {
-    my $this = shift;
-
-    my $required_ver = version->parse("v1.03_001");
-
-    $this->assert(
-        $Foswiki::Contrib::DatabaseContrib::VERSION == $required_ver,
-"Module version mismatch, expect $required_ver, got $Foswiki::Contrib::DatabaseContrib::VERSION "
-    );
-}
-
 sub test_permissions {
     my $this = shift;
 

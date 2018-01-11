@@ -34,7 +34,7 @@ use Data::Dumper;
 #   v1.2.1_001 -> v1.2.2 -> v1.2.2_001 -> v1.2.3
 #   1.21_001 -> 1.22 -> 1.22_001 -> 1.23
 #
-use version; our $VERSION = version->declare('1.04');
+use version; our $VERSION = version->declare('1.04.01');
 
 # $RELEASE is used in the "Find More Extensions" automation in configure.
 # It is a manually maintained string used to identify functionality steps.
@@ -116,8 +116,11 @@ sub _fail {
 # itself (i.e. \* -> *, \\ -> \); all non-globs are then quoted for regexp.
 sub _glob2rx {
     my $glob = shift;
-    return join ".*", map { s/\\(.)/$1/g; quotemeta($_) } split /(?<!\\)\*/,
-      $glob;
+    return join "", map {
+        if ( $_ eq '*' ) { $_ = '.*' }
+        else             { s/\\(.)/$1/g; $_ = quotemeta($_) }
+        $_
+    } split /(?<!\\)(\*)/, $glob;
 }
 
 sub _check_init {
