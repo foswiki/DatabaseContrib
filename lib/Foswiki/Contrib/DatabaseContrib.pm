@@ -49,7 +49,7 @@ use version; our $VERSION = version->declare('1.04.01');
 # It is preferred to keep this compatible with $VERSION. At some future
 # date, Foswiki will deprecate RELEASE and use the VERSION string.
 #
-our $RELEASE = '8 Jan 2018';
+our $RELEASE = '10 Jan 2018';
 
 # One-line description of the module
 our $SHORTDESCRIPTION =
